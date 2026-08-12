@@ -10,11 +10,10 @@
  * or hide content behind a chevron with those styles.
  */
 
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import type { FirebaseMessagingTypes } from '@react-native-firebase/messaging';
 import notifee, {
   AndroidImportance,
-  AndroidStyle,
   EventType,
   AuthorizationStatus,
 } from '@notifee/react-native';
@@ -46,12 +45,22 @@ export const NOTIFICATION_CATEGORIES: readonly string[] = [
 
 const ANDROID_CHANNEL_ID = 'karins_fleet_alerts_high';
 export const ANDROID_NOTIFICATION_SMALL_ICON = 'ic_stat_notification';
-/** Launcher branding in the expanded row — status bar still uses the monochrome small icon. */
-const ANDROID_NOTIFICATION_LARGE_ICON = 'ic_launcher';
+/**
+ * Fallback drawable/mipmap names when the preferred status icon is missing after
+ * R8 resource shrinking — prevents a hard native abort on OEM phones.
+ */
+const ANDROID_NOTIFICATION_SMALL_ICON_FALLBACKS = [
+  ANDROID_NOTIFICATION_SMALL_ICON,
+  'ic_launcher',
+] as const;
 /** Matches android/app/src/main/res/values/colors.xml notification_accent. */
 const ANDROID_NOTIFICATION_COLOR = '#16B7F3';
 let openHandlersRegistered = false;
 let notifeeHandlersRegistered = false;
+/** Serialize tray writes — parallel Notifee displays after dashboard sync can native-crash OEMs. */
+let displayQueue: Promise<unknown> = Promise.resolve();
+/** Remember which smallIcon name succeeded so we do not keep probing on every alert. */
+let resolvedAndroidSmallIcon: string | null = null;
 
 /**
  * Flatten multi-line detail into one tray line so Android shows the full message
@@ -64,32 +73,110 @@ function formatTrayBody(notification: Pick<FleetNotification, 'body' | 'detail'>
   return fullText.replace(/\s*\n+\s*/g, ', ');
 }
 
+/** Notifee requires string/number data values — booleans/nulls throw and some OEMs abort. */
+function toNotifeeData(
+  data?: Record<string, unknown> | null,
+): Record<string, string> {
+  if (!data) return {};
+  const out: Record<string, string> = {};
+  Object.entries(data).forEach(([key, value]) => {
+    if (value === undefined || value === null) return;
+    out[key] = typeof value === 'string' ? value : String(value);
+  });
+  return out;
+}
+
+/** Only remote http(s) art is safe for BigPicture — resource names / relative paths crash natively. */
+function isRemoteImageUrl(url: string | null | undefined): url is string {
+  return !!url && /^https?:\/\//i.test(url.trim());
+}
+
 /** Shared Android tray chrome so local + FCM alerts look the same across OEMs. */
 function buildAndroidDisplayOptions(
-  options?: { onlyAlertOnce?: boolean; imageUrl?: string | null },
+  options?: {
+    onlyAlertOnce?: boolean;
+    imageUrl?: string | null;
+    smallIcon?: string;
+  },
 ) {
-  const imageUrl = options?.imageUrl?.trim() || null;
+  // Intentionally ignore imageUrl for the tray row.
+  // Notifee BigPicture downloads the bitmap on the native thread and OOM-crashes
+  // low-RAM / aggressive OEMs; in-app Preview already shows the artwork safely.
+  void options?.imageUrl;
 
   return {
     channelId: ANDROID_CHANNEL_ID,
     pressAction: { id: 'default' as const },
-    smallIcon: ANDROID_NOTIFICATION_SMALL_ICON,
-    // Prefer the alert image as large icon when present; else app launcher mark.
-    largeIcon: imageUrl || ANDROID_NOTIFICATION_LARGE_ICON,
+    smallIcon: options?.smallIcon ?? resolvedAndroidSmallIcon ?? ANDROID_NOTIFICATION_SMALL_ICON,
     color: ANDROID_NOTIFICATION_COLOR,
     importance: AndroidImportance.HIGH,
     sound: 'default',
     onlyAlertOnce: options?.onlyAlertOnce ?? false,
-    // BigPicture expands the tray row so received image broadcasts are visible.
-    ...(imageUrl
-      ? {
-          style: {
-            type: AndroidStyle.BIGPICTURE as const,
-            picture: imageUrl,
-          },
-        }
-      : {}),
   };
+}
+
+/** Run Notifee display work one-at-a-time to avoid native races on multi-alert dashboard sync. */
+function enqueueNotifeeDisplay<T>(work: () => Promise<T>): Promise<T> {
+  const run = displayQueue.then(work, work);
+  // Keep the chain alive even when one display rejects.
+  displayQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+/**
+ * Post a tray notification, trying safe smallIcon fallbacks.
+ * Some OEM builds abort the process when Notifee gets a missing drawable name.
+ */
+async function displayWithSafeAndroidIcon(
+  payload: Parameters<typeof notifee.displayNotification>[0],
+  options?: { onlyAlertOnce?: boolean; imageUrl?: string | null },
+): Promise<void> {
+  const iconCandidates = resolvedAndroidSmallIcon
+    ? [resolvedAndroidSmallIcon]
+    : [...ANDROID_NOTIFICATION_SMALL_ICON_FALLBACKS];
+
+  let lastError: unknown;
+  for (const smallIcon of iconCandidates) {
+    try {
+      await enqueueNotifeeDisplay(() =>
+        notifee.displayNotification({
+          ...payload,
+          android: buildAndroidDisplayOptions({
+            onlyAlertOnce: options?.onlyAlertOnce,
+            imageUrl: options?.imageUrl,
+            smallIcon,
+          }),
+        }),
+      );
+      resolvedAndroidSmallIcon = smallIcon;
+      return;
+    } catch (error) {
+      lastError = error;
+      // Try the next drawable — do not rethrow until all candidates fail.
+    }
+  }
+
+  // Last resort: omit smallIcon and let Notifee / Android use the app default.
+  try {
+    await enqueueNotifeeDisplay(() =>
+      notifee.displayNotification({
+        ...payload,
+        android: {
+          channelId: ANDROID_CHANNEL_ID,
+          pressAction: { id: 'default' as const },
+          color: ANDROID_NOTIFICATION_COLOR,
+          importance: AndroidImportance.HIGH,
+          sound: 'default',
+          onlyAlertOnce: options?.onlyAlertOnce ?? false,
+        },
+      }),
+    );
+  } catch {
+    throw lastError ?? new Error('Failed to display notification');
+  }
 }
 
 /** Pull alerts already shown in the system tray into the in-app inbox. */
@@ -136,20 +223,31 @@ async function requestAndroidNotificationPermission(): Promise<boolean> {
 
 /** OS permission for local Notifee banners — does not require Firebase. */
 async function ensureLocalNotificationPermission(): Promise<boolean> {
+  // Read-only check — safe without a foreground Activity.
+  const alreadyGranted = await canShowLocalNotifications();
+  if (alreadyGranted) return true;
+
+  // Notifee.requestPermission() needs PermissionAwareActivity; on Vivo/Android 16
+  // it logs "Unable to get permissionAwareActivity" when called too early.
+  if (AppState.currentState !== 'active') {
+    return false;
+  }
+
+  if (Platform.OS === 'android') {
+    // Android 13+ — system POST_NOTIFICATIONS dialog via react-native-permissions.
+    if (Platform.Version >= 33) {
+      return requestAndroidNotificationPermission();
+    }
+    return true;
+  }
+
   try {
     const settings = await notifee.requestPermission();
-    if (Platform.OS === 'android' && Platform.Version < 33) {
-      return true;
-    }
-
     return (
       settings.authorizationStatus === AuthorizationStatus.AUTHORIZED
       || settings.authorizationStatus === AuthorizationStatus.PROVISIONAL
     );
   } catch {
-    if (Platform.OS === 'android') {
-      return requestAndroidNotificationPermission();
-    }
     return false;
   }
 }
@@ -214,33 +312,35 @@ export const pushService = {
       const imageUrl = resolveNotificationImageUrl(
         notification.image ?? notification.data?.image,
       );
-      await notifee.displayNotification({
-        id: notification.id,
-        title: notification.title,
-        body: trayBody,
-        data: {
-          category: notification.category,
-          createdAt: notification.createdAt,
-          ...(notification.data ?? {}),
-          ...(imageUrl ? { image: imageUrl } : {}),
+      await displayWithSafeAndroidIcon(
+        {
+          id: String(notification.id),
+          title: notification.title,
+          body: trayBody,
+          data: toNotifeeData({
+            category: notification.category,
+            createdAt: notification.createdAt,
+            ...(notification.data ?? {}),
+            ...(imageUrl ? { image: imageUrl } : {}),
+          }),
+          ios: {
+            foregroundPresentationOptions: {
+              alert: true,
+              badge: true,
+              sound: true,
+            },
+            ...(isRemoteImageUrl(imageUrl)
+              ? {
+                  attachments: [{ url: imageUrl }],
+                }
+              : {}),
+          },
         },
-        android: buildAndroidDisplayOptions({
+        {
           onlyAlertOnce: options?.onlyAlertOnce,
           imageUrl,
-        }),
-        ios: {
-          foregroundPresentationOptions: {
-            alert: true,
-            badge: true,
-            sound: true,
-          },
-          ...(imageUrl
-            ? {
-                attachments: [{ url: imageUrl }],
-              }
-            : {}),
         },
-      });
+      );
       return true;
     } catch {
       return false;
@@ -330,6 +430,16 @@ export const pushService = {
     if (!messaging) return null;
 
     try {
+      // iOS will not mint an FCM token until the device is registered for remote messages.
+      if (Platform.OS === 'ios') {
+        const alreadyRegistered =
+          typeof messaging.isDeviceRegisteredForRemoteMessages === 'boolean'
+            ? messaging.isDeviceRegisteredForRemoteMessages
+            : false;
+        if (!alreadyRegistered) {
+          await messaging.registerDeviceForRemoteMessages();
+        }
+      }
       return await messaging.getToken();
     } catch {
       return null;
@@ -358,25 +468,27 @@ export const pushService = {
 
       const trayBody = formatTrayBody(mapped);
       const imageUrl = resolveNotificationImageUrl(mapped.image ?? mapped.data?.image);
-      await notifee.displayNotification({
-        id: mapped.id,
-        title: mapped.title,
-        body: trayBody,
-        data: {
-          ...mapped.data,
-          category: mapped.category,
-          createdAt: mapped.createdAt,
-          ...(imageUrl ? { image: imageUrl } : {}),
+      await displayWithSafeAndroidIcon(
+        {
+          id: String(mapped.id),
+          title: mapped.title,
+          body: trayBody,
+          data: toNotifeeData({
+            ...(mapped.data ?? {}),
+            category: mapped.category,
+            createdAt: mapped.createdAt,
+            ...(imageUrl ? { image: imageUrl } : {}),
+          }),
+          ios: {
+            ...(isRemoteImageUrl(imageUrl)
+              ? {
+                  attachments: [{ url: imageUrl }],
+                }
+              : {}),
+          },
         },
-        android: buildAndroidDisplayOptions({ imageUrl }),
-        ios: {
-          ...(imageUrl
-            ? {
-                attachments: [{ url: imageUrl }],
-              }
-            : {}),
-        },
-      });
+        { imageUrl },
+      );
     } catch {
       /* display is best-effort */
     }
@@ -386,11 +498,20 @@ export const pushService = {
   async handleIncomingMessage(message: FirebaseMessagingTypes.RemoteMessage): Promise<void> {
     const mapped = mapRemoteMessageToNotification(message);
     upsertNotification(mapped);
-    // Admin broadcasts also open an in-app popup while the session is active.
+    const isBroadcast =
+      mapped.category === 'broadcast'
+      || mapped.data?.type === '1'
+      || mapped.data?.page === '1';
+
+    // Admin broadcasts while foregrounded: web-style summary toast (not tray spam).
     void import('./localFleetNotificationService')
       .then(({ maybeShowBroadcastPopup }) => maybeShowBroadcastPopup(mapped))
       .catch(() => undefined);
-    await pushService.displayNotification(message);
+
+    // Category alerts still get a tray row; broadcasts rely on toast + Notice banner.
+    if (!isBroadcast) {
+      await pushService.displayNotification(message);
+    }
   },
 
   /**
@@ -443,11 +564,32 @@ export const pushService = {
   },
 };
 
-/** Called for data-only / background FCM messages. */
+/**
+ * Data-only FCM while backgrounded/killed — OS will not auto-tray these on Android,
+ * so Notifee must display (same chrome as foreground).
+ *
+ * Silent `sync_fleet_alerts` data messages pull dashboard summary and post
+ * derived tray alerts without opening the app (backend-triggered alternative
+ * to periodic background fetch).
+ */
 export async function handleBackgroundPush(
   message: FirebaseMessagingTypes.RemoteMessage,
 ): Promise<void> {
+  const data = message.data ?? {};
+  const syncAction = String(data.action ?? data.type ?? '').toLowerCase();
+  if (syncAction === 'sync_fleet_alerts' || data.syncDashboard === '1') {
+    const { runBackgroundFleetSync } = await import('./backgroundFleetSync');
+    await runBackgroundFleetSync();
+    return;
+  }
+
   await pushService.ensureAndroidChannel();
-  upsertNotification(mapRemoteMessageToNotification(message));
+  const mapped = mapRemoteMessageToNotification(message);
+  upsertNotification(mapped);
+  // Prevent the foreground poll from re-buzzing this broadcast after the user returns.
+  // Import dedupe helper only — avoids circular import with localFleetNotificationService.
+  void import('./broadcastPushDedupe')
+    .then(({ markBroadcastPushShown }) => markBroadcastPushShown(mapped.id))
+    .catch(() => undefined);
   await pushService.displayNotification(message);
 }

@@ -1,6 +1,7 @@
 /**
- * In-app popup queue for admin type=1 broadcasts.
- * Decouples sync/push delivery from UI so a Modal can show while the app is open.
+ * In-app detail popup queue for admin type=1 broadcasts.
+ * Used when the user taps View (Notice banner / inbox) — not auto-fired on arrival
+ * (arrival uses broadcastArrivalEvents toast, matching web).
  */
 
 import type { FleetNotification } from './notificationTypes';
@@ -9,7 +10,6 @@ type Listener = (notification: FleetNotification) => void;
 
 const listeners = new Set<Listener>();
 const queue: FleetNotification[] = [];
-const seenIds = new Set<string>();
 let isPresenting = false;
 
 function flush(): void {
@@ -30,12 +30,16 @@ export const broadcastPopupEvents = {
   },
 
   /**
-   * Ask the UI to show an admin broadcast popup.
-   * Dedupes by id so poll + FCM do not open the same alert twice.
+   * Show detail for a broadcast the user explicitly opened.
+   * Dedupes only while already queued/presenting the same id.
    */
   enqueue(notification: FleetNotification): void {
-    if (seenIds.has(notification.id)) return;
-    seenIds.add(notification.id);
+    if (isPresenting) {
+      // Replace nothing — queue behind the current detail if different id.
+      if (queue.some((row) => row.id === notification.id)) return;
+    } else if (queue.some((row) => row.id === notification.id)) {
+      return;
+    }
     queue.push(notification);
     flush();
   },

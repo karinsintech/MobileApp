@@ -43,6 +43,12 @@ export async function registerPushDevice(): Promise<boolean> {
       return false;
     }
 
+    if (__DEV__) {
+      console.log(
+        `[FCM] Got token len=${fcmToken.length} prefix=${fcmToken.slice(0, 12)}…`,
+      );
+    }
+
     const deviceId = await DeviceInfo.getUniqueId();
     await SecureStorage.setDeviceId(deviceId);
 
@@ -56,7 +62,7 @@ export async function registerPushDevice(): Promise<boolean> {
     });
 
     if (__DEV__) {
-      console.log('[FCM] Device registered with backend');
+      console.log('[FCM] Device registered with backend for admin pushes');
     }
     return true;
   } catch (error) {

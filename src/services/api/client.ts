@@ -51,7 +51,8 @@ export const apiClient: AxiosInstance = axios.create({
   headers: {
     'Content-Type': 'application/json',
     'X-App-Platform': 'mobile',
-    'X-App-Version': process.env.KARINS_APP_VERSION ?? '2.1.1',
+    'X-App-Version':
+      (typeof process !== 'undefined' && process.env?.KARINS_APP_VERSION) || '2.1.3',
   },
 });
 
@@ -126,7 +127,8 @@ async function refreshAccessTokenWithBearer(): Promise<string | null> {
         headers: {
           'Content-Type': 'application/json',
           'X-App-Platform': 'mobile',
-          'X-App-Version': process.env.KARINS_APP_VERSION ?? '2.1.2',
+          'X-App-Version':
+      (typeof process !== 'undefined' && process.env?.KARINS_APP_VERSION) || '2.1.3',
         },
       },
     );

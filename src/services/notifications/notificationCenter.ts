@@ -89,6 +89,27 @@ function pruneInbox(items: FleetNotification[]): FleetNotification[] {
   });
 }
 
+/** Milliseconds for inbox ordering — schedule time when present, else createdAt. */
+function notificationSortTimeMs(row: FleetNotification): number {
+  const raw = row.scheduledAt || row.createdAt;
+  const parsed = new Date(String(raw ?? '')).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/**
+ * Align the inbox strictly by date/time — newest first, oldest last.
+ * No type priority (admin vs DL/challan); only the timestamp decides order.
+ */
+function sortNotificationsNewestFirst(
+  items: FleetNotification[],
+): FleetNotification[] {
+  return [...items].sort((a, b) => {
+    const delta = notificationSortTimeMs(b) - notificationSortTimeMs(a);
+    if (delta !== 0) return delta;
+    return String(b.id).localeCompare(String(a.id));
+  });
+}
+
 function isBrokenMediaRouteUrl(value?: string | null): boolean {
   const raw = String(value ?? '');
   return /\/notification\/\d+\/image\/?$/i.test(raw)
@@ -126,18 +147,40 @@ export function loadNotifications(): FleetNotification[] {
   // One-time scrub of bad image URLs left by earlier resolve rewrites.
   if (fixVersion !== String(NOTIFICATIONS_IMAGE_FIX_VERSION)) {
     items = sanitizeNotificationImageFields(items);
-    Cache.setJSON(NOTIFICATIONS_CACHE_KEY, items.slice(0, MAX_STORED_NOTIFICATIONS));
+    saveNotifications(items);
     Cache.set(NOTIFICATIONS_IMAGE_FIX_KEY, String(NOTIFICATIONS_IMAGE_FIX_VERSION));
   } else if (items.length !== stored.length) {
-    Cache.setJSON(NOTIFICATIONS_CACHE_KEY, items.slice(0, MAX_STORED_NOTIFICATIONS));
+    saveNotifications(items);
   }
 
-  return items;
+  // Newest first even when cache was written by an older build.
+  return sortNotificationsNewestFirst(items);
 }
 
 export function saveNotifications(items: FleetNotification[]): void {
-  const pruned = pruneInbox(items);
+  // Persist newest-first so every sync/upsert path shows the same order.
+  const pruned = sortNotificationsNewestFirst(pruneInbox(items));
   Cache.setJSON(NOTIFICATIONS_CACHE_KEY, pruned.slice(0, MAX_STORED_NOTIFICATIONS));
+}
+
+/** Stable fingerprint so we can skip emit/save when a sync changed nothing. */
+function inboxFingerprint(items: FleetNotification[]): string {
+  // Sort by id — derived sync and broadcast sync reorder the array differently.
+  return [...items]
+    .map((row) =>
+      [
+        row.id,
+        row.title,
+        row.body,
+        row.detail ?? '',
+        row.read ? '1' : '0',
+        row.image ?? '',
+        row.expiresAt ?? '',
+        row.scheduledAt ?? '',
+      ].join('\u001f'),
+    )
+    .sort()
+    .join('\u001e');
 }
 
 /** Badge count — unread only (condition-based ops alerts always count while present). */
@@ -151,9 +194,10 @@ export function getUnreadNotificationCount(): number {
 /**
  * Full inbox list: keep opened rows visible (light) instead of removing them.
  * Badge unread count is separate via getUnreadNotificationCount.
+ * Always newest-first — covers caches written before sorted save landed.
  */
 export function getVisibleNotifications(): FleetNotification[] {
-  return loadNotifications();
+  return sortNotificationsNewestFirst(loadNotifications());
 }
 
 export function upsertNotification(item: FleetNotification): FleetNotification[] {
@@ -196,15 +240,24 @@ export function syncDerivedNotifications(
   const nonDashboard = existing.filter((row) => !isDashboardRow(row));
 
   const mergedDerived = derived.map((item) => {
+    const prior = existing.find((row) => row.id === item.id);
+    // Keep the first-seen timestamp so date sorting stays stable across polls
+    // (otherwise every sync stamps “now” and DL/wallet cards jump above older admin rows).
+    const createdAt = prior?.createdAt ?? item.createdAt;
+
     // Wallet/challan/compliance alerts must not stay “read” after mark-all — issue still open
     if (isConditionBasedDashboardRow(item)) {
-      return { ...item, read: false };
+      return { ...item, createdAt, read: false };
     }
-    const prior = existing.find((row) => row.id === item.id);
-    return prior ? { ...item, read: prior.read } : item;
+    return prior ? { ...item, createdAt, read: prior.read } : item;
   });
 
   const next = [...mergedDerived, ...nonDashboard];
+  // Avoid notification-menu flicker when dashboard/badge poll re-writes the same rows.
+  if (inboxFingerprint(existing) === inboxFingerprint(next)) {
+    return existing;
+  }
+
   saveNotifications(next);
   notificationEvents.emit();
   return loadNotifications();
@@ -215,9 +268,17 @@ function mapApiRowToFleetNotification(row: NotificationListRow): FleetNotificati
   const shortBody =
     fullText.length > 90 ? `${fullText.substring(0, 90)}…` : fullText || row.text || '';
 
-  const createdAt = row.createdAt
-    ? new Date(row.createdAt).toISOString()
+  // Prefer schedule time when present so timed Notice items match web ordering.
+  const createdAt = row.scheduledAt || row.createdAt
+    ? new Date(String(row.scheduledAt || row.createdAt)).toISOString()
     : new Date().toISOString();
+
+  const scheduledAt = row.scheduledAt
+    ? new Date(row.scheduledAt).toISOString()
+    : null;
+  const expiresAt = row.expiresAt
+    ? new Date(row.expiresAt).toISOString()
+    : null;
 
   // Store the raw API path (or absolute URL). Resolve to host URL only at display
   // time so we never persist a rewritten/broken media route in cache.
@@ -232,12 +293,16 @@ function mapApiRowToFleetNotification(row: NotificationListRow): FleetNotificati
     detail: fullText || shortBody || undefined,
     image,
     createdAt,
+    scheduledAt,
+    expiresAt,
     read: Boolean(row.isRead),
     data: {
       type: String(row.type ?? 1),
       page: '1',
       notificationId: String(row.id),
       ...(image ? { image } : {}),
+      ...(scheduledAt ? { scheduledAt } : {}),
+      ...(expiresAt ? { expiresAt } : {}),
     },
   };
 }
@@ -251,17 +316,6 @@ export async function syncBroadcastNotificationsFromApi(): Promise<FleetNotifica
   try {
     const rows = await notificationApi.list(50);
     const broadcasts = rows.map(mapApiRowToFleetNotification);
-
-    if (__DEV__) {
-      broadcasts.forEach((row) => {
-        console.log(
-          '[Notifications] broadcast image',
-          row.id,
-          row.title,
-          row.image ?? '(none)',
-        );
-      });
-    }
 
     const existing = loadNotifications();
     const dashboardAndOther = existing.filter((row) => !isBroadcastRow(row));
@@ -288,15 +342,18 @@ export async function syncBroadcastNotificationsFromApi(): Promise<FleetNotifica
     });
 
     const next = [...mergedBroadcasts, ...dashboardAndOther];
-    saveNotifications(next);
-    notificationEvents.emit();
+    const changed = inboxFingerprint(existing) !== inboxFingerprint(next);
+    if (changed) {
+      saveNotifications(next);
+      notificationEvents.emit();
+    }
 
     // Dynamic import avoids a circular dep with pushService → notificationCenter.
     void import('./localFleetNotificationService')
       .then(({ showNewBroadcastPushes }) => showNewBroadcastPushes(mergedBroadcasts))
       .catch(() => undefined);
 
-    return loadNotifications();
+    return changed ? loadNotifications() : existing;
   } catch (error) {
     if (__DEV__) {
       console.warn('[Notifications] API sync failed — showing cached inbox', error);
@@ -330,6 +387,27 @@ export function markAllNotificationsRead(): FleetNotification[] {
   return loadNotifications();
 }
 
+/** Soft-remove one inbox row locally (after DELETE /notification/delete-for-user/:id). */
+export function removeNotification(id: string): FleetNotification[] {
+  const next = loadNotifications().filter((row) => row.id !== id);
+  saveNotifications(next);
+  notificationEvents.emit();
+  return loadNotifications();
+}
+
+/**
+ * Active timed Notice banners — same rule as web TimedBroadcastBanner:
+ * only type=1 broadcasts that still have a future expiresAt.
+ */
+export function getTimedBroadcastNotices(now = Date.now()): FleetNotification[] {
+  return getVisibleNotifications().filter((row) => {
+    if (!isBroadcastRow(row)) return false;
+    if (!row.expiresAt) return false;
+    const ends = new Date(row.expiresAt).getTime();
+    return Number.isFinite(ends) && ends > now;
+  });
+}
+
 /** Maps FCM payloads into inbox rows (admin broadcast or category alert). */
 export function mapRemoteMessageToNotification(
   message: FirebaseMessagingTypes.RemoteMessage,
@@ -358,6 +436,9 @@ export function mapRemoteMessageToNotification(
   ).trim();
   const image = rawImage ? resolveNotificationImageUrl(rawImage) ?? undefined : undefined;
 
+  const scheduledAt = data.scheduledAt ? String(data.scheduledAt) : null;
+  const expiresAt = data.expiresAt ? String(data.expiresAt) : null;
+
   return {
     id,
     category: isBroadcast
@@ -367,7 +448,9 @@ export function mapRemoteMessageToNotification(
     body: shortBody || title,
     detail: fullText || shortBody || undefined,
     image,
-    createdAt: String(data.createdAt ?? new Date().toISOString()),
+    createdAt: String(data.createdAt ?? scheduledAt ?? new Date().toISOString()),
+    scheduledAt,
+    expiresAt,
     read: false,
     data: Object.fromEntries(
       Object.entries(data).map(([key, value]) => [key, String(value)]),

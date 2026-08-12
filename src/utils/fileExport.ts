@@ -208,3 +208,77 @@ export async function downloadBinaryFile(
   await writeFileOverwrite(path, base64);
   return `Files/${safeName}`;
 }
+
+/** Guess image MIME from the URL / filename so MediaStore indexes Downloads correctly. */
+function guessImageMimeType(urlOrName: string): string {
+  const pathPart = urlOrName.split('?')[0]?.toLowerCase() ?? '';
+  if (pathPart.endsWith('.png')) return 'image/png';
+  if (pathPart.endsWith('.gif')) return 'image/gif';
+  if (pathPart.endsWith('.webp')) return 'image/webp';
+  if (pathPart.endsWith('.bmp')) return 'image/bmp';
+  return 'image/jpeg';
+}
+
+/**
+ * Download a remote image into public Downloads (Android MediaStore) or Documents (iOS).
+ * Avoids writing straight to DownloadDirectoryPath — that fails on Android 10+ scoped storage.
+ */
+export async function downloadRemoteUrlToDownloads(
+  url: string,
+  filename: string,
+): Promise<string> {
+  const safeName = filename.replace(/[^\w.-]/g, '_') || `notification_${Date.now()}.jpg`;
+  const mimeType = guessImageMimeType(filename || url);
+  const tempPath = `${RNFS.CachesDirectoryPath}/${Date.now()}_${safeName}`;
+
+  const result = await RNFS.downloadFile({
+    fromUrl: url,
+    toFile: tempPath,
+  }).promise;
+
+  if (result.statusCode && result.statusCode >= 400) {
+    try {
+      await RNFS.unlink(tempPath);
+    } catch {
+      // Temp cleanup is best-effort
+    }
+    throw new Error(`Download failed (${result.statusCode})`);
+  }
+
+  try {
+    const base64 = await RNFS.readFile(tempPath, 'base64');
+    if (!base64) {
+      throw new Error('Downloaded image was empty.');
+    }
+
+    if (Platform.OS === 'android') {
+      await ensureLegacyWritePermission();
+      if (FileDownload?.saveToDownloads) {
+        return FileDownload.saveToDownloads(base64, safeName, mimeType);
+      }
+      if (!RNFS.DownloadDirectoryPath) {
+        throw new Error('Downloads folder is unavailable on this device.');
+      }
+      const downloadPath = `${RNFS.DownloadDirectoryPath}/${safeName}`;
+      await writeFileOverwrite(downloadPath, base64);
+      try {
+        await RNFS.scanFile(downloadPath);
+      } catch {
+        // File may still appear after a short delay.
+      }
+      return `Downloads/${safeName}`;
+    }
+
+    const path = `${RNFS.DocumentDirectoryPath}/${safeName}`;
+    await writeFileOverwrite(path, base64);
+    return `Files/${safeName}`;
+  } finally {
+    try {
+      if (await RNFS.exists(tempPath)) {
+        await RNFS.unlink(tempPath);
+      }
+    } catch {
+      // Temp cleanup is best-effort
+    }
+  }
+}

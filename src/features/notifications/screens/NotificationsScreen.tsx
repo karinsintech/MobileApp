@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, Pressable, RefreshControl, Image,
+  View, Text, ScrollView, StyleSheet, Pressable, RefreshControl,
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import type { CompositeNavigationProp } from '@react-navigation/native';
@@ -18,12 +18,14 @@ import {
   loadNotifications,
   markAllNotificationsRead,
   markNotificationRead,
+  removeNotification,
   resolveNotificationImageUrl,
 } from '../../../services/notifications/notificationCenter';
 import { notificationEvents } from '../../../services/notifications/notificationEvents';
 import { notificationApi } from '../../../services/api/notificationApi';
 import { refreshNotificationInboxForSession } from '../../../services/notifications/notificationInboxRefresh';
 import type { FleetNotification } from '../../../services/notifications/notificationTypes';
+import { openBroadcastDetail } from '../../../services/notifications/localFleetNotificationService';
 import { useAppSelector } from '../../../store';
 import {
   dashboardHeader,
@@ -31,6 +33,7 @@ import {
   DASHBOARD_LIGHT_WHITE,
 } from '../../dashboard/dashboardTypography';
 import type { MainTabParamList, MoreStackParamList } from '../../../navigation/types';
+import NotificationImagePreview from '../components/NotificationImagePreview';
 
 // More-stack screens can also jump to sibling tabs (Claims) for claim alerts.
 type NotificationsNav = CompositeNavigationProp<
@@ -54,21 +57,6 @@ interface ComplianceBodyRow {
   label: string;
   expired: string;
   expiring: string;
-}
-
-/**
- * Same as web NotificationDrawer: resolve path → absolute URL, then render with Image.
- * No fetch/data-URI pipeline — browser-style direct URI load.
- */
-function NotificationImage({ uri }: { uri: string }) {
-  return (
-    <Image
-      source={{ uri }}
-      style={styles.image}
-      resizeMode="contain"
-      accessibilityLabel="Notification image"
-    />
-  );
 }
 
 /**
@@ -135,15 +123,22 @@ export default function NotificationsScreen() {
   const [items, setItems] = useState<FleetNotification[]>(() => getVisibleNotifications());
   const [refreshing, setRefreshing] = useState(false);
 
+  const userId = auth.user?.userId;
+  const customerId = auth.dashboardContext?.customerId ?? auth.user?.defaultCustomerId;
+  // Ref avoids useFocusEffect re-entry when Redux returns a new auth.user object identity.
+  const authRef = useRef(auth);
+  authRef.current = auth;
+
   const reload = useCallback(async () => {
+    const latest = authRef.current;
     await refreshNotificationInboxForSession({
-      user: auth.user,
-      dashboardContext: auth.dashboardContext,
-      accessToken: auth.accessToken,
+      user: latest.user,
+      dashboardContext: latest.dashboardContext,
+      isAuthenticated: latest.isAuthenticated,
       fetchFreshDashboard: true,
     });
     setItems(getVisibleNotifications());
-  }, [auth.accessToken, auth.dashboardContext, auth.user]);
+  }, []);
 
   useEffect(() => {
     return notificationEvents.subscribe(() => {
@@ -151,11 +146,11 @@ export default function NotificationsScreen() {
     });
   }, []);
 
-  // Frozen tab stacks skip React updates — always reload from API + cache on focus.
+  // Reload once on focus / session change — not on every auth object identity churn.
   useFocusEffect(
     useCallback(() => {
       void reload();
-    }, [reload]),
+    }, [reload, userId, customerId]),
   );
 
   const markRead = useCallback((id: string) => {
@@ -192,6 +187,25 @@ export default function NotificationsScreen() {
     void notificationApi.markAllRead().catch(() => {
       /* local read already applied */
     });
+  }, []);
+
+  /** Soft-delete broadcast for this user — same as web drawer clear (X). */
+  const clearBroadcast = useCallback((item: FleetNotification) => {
+    const isBroadcast =
+      item.category === 'broadcast'
+      || item.data?.type === '1'
+      || item.data?.page === '1';
+    if (!isBroadcast) return;
+
+    removeNotification(item.id);
+    setItems((prev) => prev.filter((row) => row.id !== item.id));
+
+    const numericId = Number(item.id);
+    if (Number.isFinite(numericId) && numericId > 0) {
+      void notificationApi.deleteForUser(numericId).catch(() => {
+        /* local remove already applied */
+      });
+    }
   }, []);
 
   const onRefresh = useCallback(async () => {
@@ -247,6 +261,15 @@ export default function NotificationsScreen() {
       <Pressable
         key={item.id}
         onPress={() => {
+          const isBroadcast =
+            item.category === 'broadcast'
+            || item.data?.type === '1'
+            || item.data?.page === '1';
+          // Web: tap row → detail popup; mark read on close of detail.
+          if (isBroadcast) {
+            openBroadcastDetail(item);
+            return;
+          }
           if (!isConditionBasedDashboardRow(item)) {
             markRead(item.id);
           }
@@ -265,6 +288,21 @@ export default function NotificationsScreen() {
                 <AlertDot size={9} color={Colors.info} />
               </View>
             ) : null}
+            {(item.category === 'broadcast'
+              || item.data?.type === '1'
+              || item.data?.page === '1') ? (
+              <Pressable
+                onPress={(e) => {
+                  // Stop row press from opening detail while clearing.
+                  e?.stopPropagation?.();
+                  clearBroadcast(item);
+                }}
+                hitSlop={10}
+                accessibilityLabel="Clear notification"
+              >
+                <Text style={styles.clearBtn}>✕</Text>
+              </Pressable>
+            ) : null}
           </View>
           {complianceRows.length > 0 ? (
             <View style={styles.complianceBody}>
@@ -282,7 +320,13 @@ export default function NotificationsScreen() {
           ) : (
             <Text style={styles.body}>{displayText}</Text>
           )}
-          {imageUrl ? <NotificationImage uri={imageUrl} /> : null}
+          {imageUrl ? (
+            <NotificationImagePreview
+              uri={imageUrl}
+              title={item.title}
+              height={220}
+            />
+          ) : null}
           <View style={styles.footerRow}>
             <Text style={styles.time}>{fmtDateTime(item.createdAt)}</Text>
             {action ? (
@@ -378,6 +422,13 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     flex: 1,
   },
+  clearBtn: {
+    color: DASHBOARD_LIGHT_WHITE,
+    fontSize: FontSize.md,
+    fontWeight: '600',
+    paddingHorizontal: 4,
+    marginTop: 2,
+  },
   titleUnread: {
     fontWeight: '700',
   },
@@ -385,17 +436,6 @@ const styles = StyleSheet.create({
     ...dashboardBody,
     lineHeight: 18,
     marginBottom: Spacing[2],
-  },
-  // Match web NotificationDetailPopup image: full width, contain, light frame.
-  image: {
-    width: '100%',
-    maxHeight: 220,
-    height: 220,
-    borderRadius: 10,
-    marginBottom: Spacing[2],
-    borderWidth: 1,
-    borderColor: 'rgba(229, 233, 242, 0.35)',
-    backgroundColor: 'rgba(248, 250, 252, 0.12)',
   },
   complianceBody: {
     gap: 6,

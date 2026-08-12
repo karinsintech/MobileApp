@@ -5,6 +5,7 @@
 
 import type { RoleKey } from '../../types/auth';
 import { requiresAdminContextPicker, resolveActiveCustomerId } from '../../types/auth';
+import type { DashboardContext } from '../../types/auth';
 import type { DashboardSummary } from '../../types/dashboard';
 import { normalizeDashboardSummary } from '../../features/dashboard/utils/dashboardSummaryUtils';
 import { dashboardApi } from '../api/dashboardApi';
@@ -48,7 +49,8 @@ export async function refreshNotificationInbox(
   const cacheKey = buildDashboardCacheKey(userId, customerId);
 
   const syncFromSummary = (summary: DashboardSummary) => {
-    syncDashboardNotifications(summary, { userId, customerId });
+    // Badge / inbox refresh must not re-fire OS tray heads-ups — Dashboard owns that.
+    syncDashboardNotifications(summary, { userId, customerId }, { alertTray: false });
   };
 
   // Paint from cache immediately so wallet/compliance alerts appear without waiting on network.
@@ -76,19 +78,24 @@ export async function refreshNotificationInbox(
   return loadNotifications();
 }
 
-/** Convenience wrapper using auth slice fields. */
+/**
+ * Convenience wrapper using auth slice fields.
+ * Access tokens live in Keychain (not Redux) — gate on isAuthenticated / userId.
+ * The API client attaches the Keychain token on each request.
+ */
 export async function refreshNotificationInboxForSession(auth: {
-  user?: { userId?: number; roleKey?: RoleKey; defaultCustomerId?: number | null };
-  dashboardContext?: { customerId?: number | null };
-  accessToken?: string | null;
+  user?: { userId?: number; roleKey?: RoleKey; defaultCustomerId?: number | null } | null;
+  dashboardContext?: DashboardContext | { customerId?: number | null } | null;
+  isAuthenticated?: boolean;
   fetchFreshDashboard?: boolean;
 }): Promise<FleetNotification[]> {
-  if (!auth.accessToken) {
+  // Skip network refresh when logged out — local cache is enough for the empty bell.
+  if (auth.isAuthenticated === false || !auth.user?.userId) {
     return loadNotifications();
   }
 
   const customerId = resolveActiveCustomerId(
-    auth.dashboardContext,
+    (auth.dashboardContext as DashboardContext | null | undefined) ?? null,
     auth.user?.defaultCustomerId,
   );
 

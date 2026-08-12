@@ -1,7 +1,7 @@
 /**
  * Notification APIs — same as karins_fastag_react / Node:
- * list type=1 broadcasts, mark one / all read.
- * Mobile syncs these into the inbox and raises new unread rows as tray pushes.
+ * list type=1 broadcasts, mark one / all read, soft-delete for current user.
+ * Mobile syncs these into the inbox (web bell parity) and surfaces timed Notice banners.
  */
 import { apiClient } from './client';
 
@@ -13,6 +13,9 @@ export interface NotificationListRow {
   /** Legacy Yii list field — same path as `image` when present. */
   image_path?: string | null;
   createdAt?: string | null;
+  /** Admin schedule window — drives mobile Notice banner like web TimedBroadcastBanner. */
+  scheduledAt?: string | null;
+  expiresAt?: string | null;
   isRead?: boolean;
   type?: number;
 }
@@ -66,4 +69,8 @@ export const notificationApi = {
 
   /** Marks all visible broadcasts as read for the current user. */
   markAllRead: () => apiClient.post('/notification/mark-all-read'),
+
+  /** Soft-delete for the current user only — same as web drawer clear (X). */
+  deleteForUser: (notificationId: string | number) =>
+    apiClient.delete(`/notification/delete-for-user/${notificationId}`),
 };

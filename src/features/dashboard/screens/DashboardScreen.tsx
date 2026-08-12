@@ -8,7 +8,7 @@
 
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, RefreshControl, TouchableOpacity, Platform,
+  View, Text, ScrollView, StyleSheet, RefreshControl, TouchableOpacity,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -50,6 +50,7 @@ import {
 import type {TollPeriod} from '../../../types/dashboard';
 import FleetHealthHeroCard from '../components/FleetHealthHeroCard';
 import CriticalActionStrip from '../components/CriticalActionStrip';
+import TimedBroadcastBanner from '../../notifications/components/TimedBroadcastBanner';
 
 // Cache is scoped to the active identity (user + customer) so a previous
 // session's snapshot is never painted after a different account logs in or an
@@ -314,10 +315,15 @@ export default function DashboardScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={Colors.blue} />
         }
         showsVerticalScrollIndicator={false}
-        removeClippedSubviews={Platform.OS === 'android'}
+        // Do NOT enable removeClippedSubviews on Android — it drops dashboard
+        // cards from the view hierarchy when scrolling back up, so the action
+        // strip / wallet / data section looks "hidden" and unreachable.
         keyboardShouldPersistTaps="handled"
       >
         <DashboardSearchBar onOpenVehicle={handleOpenVehicle360} />
+
+        {/* Web TimedBroadcastBanner — Notice strip for broadcasts with expiresAt */}
+        <TimedBroadcastBanner />
 
         {showCustomerPicker && !customerId ? (
           <GlassCard style={styles.promptCard}>

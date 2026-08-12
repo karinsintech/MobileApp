@@ -15,8 +15,15 @@ function loadMessagingModule(): MessagingModule | null {
     const firebaseApp = require('@react-native-firebase/app').default;
     firebaseApp.app();
     messagingModule = require('@react-native-firebase/messaging').default;
-  } catch {
+  } catch (error) {
     messagingModule = null;
+    if (__DEV__) {
+      // Without Firebase init, background/killed pushes cannot reach this device.
+      console.warn(
+        '[FCM] Messaging module unavailable — background push disabled.',
+        error,
+      );
+    }
   }
 
   return messagingModule ?? null;
@@ -46,11 +53,24 @@ export function registerBackgroundMessageHandler(
   handler: (message: FirebaseMessagingTypes.RemoteMessage) => Promise<void>,
 ): void {
   const moduleRef = loadMessagingModule();
-  if (!moduleRef) return;
+  if (!moduleRef) {
+    if (__DEV__) {
+      console.warn(
+        '[FCM] setBackgroundMessageHandler skipped — Firebase not configured',
+      );
+    }
+    return;
+  }
 
   try {
+    // Must run at top-level (index.js) before App mounts — required for killed-state delivery.
     moduleRef().setBackgroundMessageHandler(handler);
-  } catch {
-    /* push disabled */
+    if (__DEV__) {
+      console.log('[FCM] Background message handler registered');
+    }
+  } catch (error) {
+    if (__DEV__) {
+      console.warn('[FCM] setBackgroundMessageHandler failed', error);
+    }
   }
 }

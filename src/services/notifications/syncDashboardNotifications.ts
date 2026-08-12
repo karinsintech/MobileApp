@@ -213,13 +213,23 @@ export function deriveDashboardNotifications(
 export function syncDashboardNotifications(
   summary: DashboardSummary | null | undefined,
   scope?: WalletAlertScope,
+  options?: { alertTray?: boolean },
 ): void {
   if (!summary) return;
 
   const derived = deriveDashboardNotifications(summary, scope);
   syncDerivedNotifications(derived);
 
-  derived.forEach((row) => {
-    showDerivedFleetPush(row).catch(() => undefined);
-  });
+  // Inbox/badge refreshes update local rows only — tray heads-up is dashboard-owned
+  // so open-app fan-out does not keep re-posting the same alerts.
+  if (options?.alertTray === false) return;
+
+  // Defer tray posts until after the first paint — posting Notifee during the
+  // login→dashboard transition native-crashes several OEM phones.
+  const rows = [...derived];
+  setTimeout(() => {
+    rows.forEach((row) => {
+      showDerivedFleetPush(row).catch(() => undefined);
+    });
+  }, 1500);
 }

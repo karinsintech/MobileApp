@@ -19,6 +19,7 @@ import { linking } from './linking';
 import { PostLoginSplashScreen } from '../features/splash/PostLoginSplashScreen';
 import { usePushNotifications } from '../features/notifications/hooks/usePushNotifications';
 import BroadcastNotificationPopupHost from '../features/notifications/components/BroadcastNotificationPopupHost';
+import BroadcastArrivalToast from '../features/notifications/components/BroadcastArrivalToast';
 import {
   flushPendingNotificationNavigation,
   navigationRef,
@@ -34,12 +35,12 @@ export function RootNavigator() {
     user,
   } = useAppSelector((state) => state.auth);
 
-  // Push must start as soon as auth is ready — do not wait for post-login splash,
-  // or the first FCM messages can arrive before channel/permission/token wiring.
   const canRegisterPush = isAuthenticated && !isBootstrapping;
+  // Defer push registration until the main shell is mounted — Notifee permission
+  // needs PermissionAwareActivity and fails during post-login splash on OEM phones.
   const sessionReady = canRegisterPush && !showPostLoginSplash;
 
-  usePushNotifications(canRegisterPush);
+  usePushNotifications(sessionReady);
 
   const showPostLoginSplashScreen = isAuthenticated && showPostLoginSplash;
 
@@ -87,8 +88,13 @@ export function RootNavigator() {
       }}
     >
       {!isAuthenticated ? <AuthStack /> : <MainTabs />}
-      {/* Admin broadcast popup sits above tabs so it appears on any screen. */}
-      {sessionReady ? <BroadcastNotificationPopupHost /> : null}
+      {/* Web-parity: summary toast + detail popup for admin broadcasts. */}
+      {sessionReady ? (
+        <>
+          <BroadcastArrivalToast />
+          <BroadcastNotificationPopupHost />
+        </>
+      ) : null}
     </NavigationContainer>
   );
 }

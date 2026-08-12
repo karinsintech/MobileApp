@@ -19,6 +19,12 @@ export interface FleetNotification {
    */
   image?: string;
   createdAt: string;
+  /**
+   * Optional schedule window from Admin (same as web TimedBroadcastBanner).
+   * When `expiresAt` is set, the dashboard shows a Notice strip until that time.
+   */
+  scheduledAt?: string | null;
+  expiresAt?: string | null;
   read: boolean;
   data?: Record<string, string>;
 }

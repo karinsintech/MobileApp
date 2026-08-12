@@ -84,8 +84,10 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         // Keep in sync with package.json; bump versionCode for every Play Store upload.
-        versionCode 31
-        versionName "2.1.1"
+        versionCode 33
+        versionName "2.1.4"
+        // Placeholder for AndroidManifest usesCleartextTraffic — allow http:// to local Node in debug.
+        manifestPlaceholders = [usesCleartextTraffic: "false"]
     }
     signingConfigs {
         debug {
@@ -107,10 +109,13 @@ android {
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
+            // Required so the app can call http://10.0.2.2:8080 (local Node) over plain HTTP.
+            manifestPlaceholders = [usesCleartextTraffic: "true"]
         }
         release {
             // Must use the upload keystore; debug signing is rejected by Play Console.
             signingConfig signingConfigs.release
+            manifestPlaceholders = [usesCleartextTraffic: "false"]
             // R8 minify + shrinkResources; with AGP 9, optimized resource shrinking
             // (android.r8.optimizedResourceShrinking) joins code and resource reachability.
             minifyEnabled enableProguardInReleaseBuilds
