@@ -500,18 +500,23 @@ export const pushService = {
     upsertNotification(mapped);
     const isBroadcast =
       mapped.category === 'broadcast'
+      || mapped.data?.action === 'admin_broadcast'
       || mapped.data?.type === '1'
       || mapped.data?.page === '1';
 
-    // Admin broadcasts while foregrounded: web-style summary toast (not tray spam).
-    void import('./localFleetNotificationService')
-      .then(({ maybeShowBroadcastPopup }) => maybeShowBroadcastPopup(mapped))
-      .catch(() => undefined);
-
-    // Category alerts still get a tray row; broadcasts rely on toast + Notice banner.
-    if (!isBroadcast) {
+    if (isBroadcast) {
+      // Foreground FCM never auto-trays on Android — post Notifee, then web-style toast.
       await pushService.displayNotification(message);
+      void import('./broadcastPushDedupe')
+        .then(({ markBroadcastPushShown }) => markBroadcastPushShown(mapped.id))
+        .catch(() => undefined);
+      void import('./localFleetNotificationService')
+        .then(({ maybeShowBroadcastPopup }) => maybeShowBroadcastPopup(mapped))
+        .catch(() => undefined);
+      return;
     }
+
+    await pushService.displayNotification(message);
   },
 
   /**
@@ -576,11 +581,19 @@ export async function handleBackgroundPush(
   message: FirebaseMessagingTypes.RemoteMessage,
 ): Promise<void> {
   const data = message.data ?? {};
-  const syncAction = String(data.action ?? data.type ?? '').toLowerCase();
-  if (syncAction === 'sync_fleet_alerts' || data.syncDashboard === '1') {
-    const { runBackgroundFleetSync } = await import('./backgroundFleetSync');
-    await runBackgroundFleetSync();
-    return;
+  const isAdminBroadcast =
+    String(data.category) === 'broadcast'
+    || String(data.action) === 'admin_broadcast'
+    || (String(data.type) === '1' && String(data.page) === '1');
+
+  // Silent fleet sync uses action only — never treat admin type=1 as sync.
+  if (!isAdminBroadcast) {
+    const syncAction = String(data.action ?? '').toLowerCase();
+    if (syncAction === 'sync_fleet_alerts' || data.syncDashboard === '1') {
+      const { runBackgroundFleetSync } = await import('./backgroundFleetSync');
+      await runBackgroundFleetSync();
+      return;
+    }
   }
 
   await pushService.ensureAndroidChannel();

@@ -40,5 +40,6 @@ export const BLOCK_ON_ROOT: boolean =
   !!process.env &&
   process.env.KARINS_BLOCK_ON_ROOT === "true";
 
-//https://testapi.karins.in/api
-//https://api.karins.in/api
+// Production (live cron / FCM): https://api.karins.in/api
+// Test API only: https://testapi.karins.in/api
+// Emulator local Node: http://10.0.2.2:8080/api

@@ -13,6 +13,7 @@ import {
   configureBackgroundFleetFetch,
   stopBackgroundFleetFetch,
 } from '../../../services/notifications/backgroundFleetFetch';
+import { markSessionBroadcastBaseline } from '../../../services/notifications/broadcastPushDedupe';
 import { syncBroadcastNotificationsFromApi } from '../../../services/notifications/notificationCenter';
 import { refreshNotificationInboxForSession } from '../../../services/notifications/notificationInboxRefresh';
 import { pushService } from '../../../services/notifications/pushService';
@@ -40,13 +41,17 @@ export function usePushNotifications(isAuthenticated: boolean): void {
     // Tray tap + FCM open handlers — safe to call repeatedly (idempotent).
     pushService.setupNotificationOpenHandlers();
 
+    // First broadcast sync after login only silences rows older than this moment.
+    markSessionBroadcastBaseline();
+
     // Foreground FCM: OS will not auto-display — we mirror into Notifee + inbox.
     const unsubscribeForeground = pushService.registerForegroundHandler((message) => {
       void pushService.handleIncomingMessage(message);
     });
 
     // Register FCM token so admin/backend can target this handset when they push.
-    void registerPushDevice();
+    // Force on session start — server may have cleared a prior NotRegistered token.
+    void registerPushDevice({ force: true });
 
     // Periodic background sync — wallet / VAHAN / DL / challan / claim tray alerts
     // without opening the app (WhatsApp-style delivery on Android + iOS).
@@ -86,7 +91,8 @@ export function usePushNotifications(isAuthenticated: boolean): void {
     }, BROADCAST_POLL_MS);
 
     const unsubscribeTokenRefresh = pushService.onTokenRefresh(() => {
-      void registerPushDevice();
+      // Firebase rotated the token — must force POST or cron keeps the dead id.
+      void registerPushDevice({ force: true });
     });
 
     return () => {

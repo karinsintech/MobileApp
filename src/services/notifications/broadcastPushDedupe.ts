@@ -10,6 +10,8 @@ import { Cache } from '../storage/SecureStorage';
 
 const BROADCAST_PUSHED_IDS_KEY = 'broadcast_push_shown_ids';
 const BROADCAST_PUSH_SEEDED_KEY = 'broadcast_push_seeded';
+/** Login-time cutoff — first sync only silences broadcasts older than this moment. */
+const BROADCAST_SESSION_BASELINE_KEY = 'broadcast_session_baseline_ms';
 const MAX_BROADCAST_PUSHED_IDS = 300;
 
 function loadBroadcastPushedIds(): Set<string> {
@@ -38,6 +40,17 @@ export function getBroadcastPushedIds(): Set<string> {
 
 export function persistBroadcastPushedIds(ids: Set<string>): void {
   saveBroadcastPushedIds(ids);
+}
+
+/** Record session start so first inbox sync does not swallow brand-new admin alerts. */
+export function markSessionBroadcastBaseline(): void {
+  Cache.set(BROADCAST_SESSION_BASELINE_KEY, String(Date.now()));
+}
+
+export function getSessionBroadcastBaselineMs(): number {
+  const raw = Cache.getString(BROADCAST_SESSION_BASELINE_KEY);
+  const parsed = raw ? Number(raw) : NaN;
+  return Number.isFinite(parsed) ? parsed : Date.now();
 }
 
 /**

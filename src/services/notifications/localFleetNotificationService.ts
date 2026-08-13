@@ -11,6 +11,7 @@ import { broadcastPopupEvents } from './broadcastPopupEvents';
 import { broadcastArrivalEvents } from './broadcastArrivalEvents';
 import {
   getBroadcastPushedIds,
+  getSessionBroadcastBaselineMs,
   isBroadcastPushSeeded,
   markBroadcastPushSeeded,
   markBroadcastPushShown,
@@ -67,12 +68,21 @@ export async function showNewBroadcastPushes(
 
   const pushedIds = getBroadcastPushedIds();
 
-  // Cold start / first login: remember current API rows without heads-up spam.
+  // First sync after login: silence only history (read or created before this session).
+  // Do not return early — admin rows created while the user is online must still alert.
   if (!isBroadcastPushSeeded()) {
-    broadcasts.forEach((row) => pushedIds.add(row.id));
+    const sessionBaselineMs = getSessionBroadcastBaselineMs();
+    broadcasts.forEach((row) => {
+      const createdMs = new Date(row.createdAt).getTime();
+      const isHistorical =
+        row.read
+        || (Number.isFinite(createdMs) && createdMs < sessionBaselineMs);
+      if (isHistorical) {
+        pushedIds.add(row.id);
+      }
+    });
     persistBroadcastPushedIds(pushedIds);
     markBroadcastPushSeeded();
-    return;
   }
 
   const isAppActive = AppState.currentState === 'active';
@@ -88,11 +98,9 @@ export async function showNewBroadcastPushes(
 
     newArrivalCount += 1;
 
-    // Background/killed still need a tray heads-up; while foregrounded we mirror
-    // web with a summary toast instead of auto-opening the detail modal.
-    if (!isAppActive) {
-      await pushService.displayLocalNotification(row);
-    }
+    // Android/iOS do not auto-tray FCM while foregrounded — Notifee must post it.
+    await pushService.displayLocalNotification(row);
+    markBroadcastPushShown(row.id);
 
     pushedIds.add(row.id);
     if (__DEV__) {
@@ -119,7 +127,6 @@ export function maybeShowBroadcastPopup(notification: FleetNotification): void {
     || notification.data?.type === '1'
     || notification.data?.page === '1';
   if (!isBroadcast || notification.read) return;
-  markBroadcastPushShown(notification.id);
   if (AppState.currentState !== 'active') return;
   broadcastArrivalEvents.notifyNew(1);
 }

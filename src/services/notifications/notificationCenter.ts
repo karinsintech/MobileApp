@@ -417,6 +417,7 @@ export function mapRemoteMessageToNotification(
 
   const isBroadcast =
     String(data.category) === 'broadcast' ||
+    String(data.action) === 'admin_broadcast' ||
     String(data.type) === '1' ||
     String(data.page) === '1';
 
