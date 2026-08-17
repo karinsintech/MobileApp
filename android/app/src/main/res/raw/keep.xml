@@ -5,4 +5,4 @@
   Notifee/FCM posts the first alert after login.
 -->
 <resources xmlns:tools="http://schemas.android.com/tools"
-    tools:keep="@drawable/ic_stat_notification,@font/audiowide" />
+    tools:keep="@drawable/ic_stat_notification,@mipmap/ic_launcher,@font/audiowide" />

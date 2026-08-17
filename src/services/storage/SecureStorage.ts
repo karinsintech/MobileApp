@@ -209,6 +209,18 @@ export const SecureStorage = {
     const pinLoginEnabled = SecureStorage.isPinLoginEnabled();
     const pinLoginMobile = SecureStorage.getPinLoginMobile();
     const lastLoginMobile = SecureStorage.getLastLoginMobile();
+    // Thresholds also live in karins-fleet-wallet-alerts; restore any leftover
+    // cache copies so older builds that still read Cache after logout keep working.
+    const walletThresholdCopies: Record<string, string> = {};
+    try {
+      mmkvCache.getAllKeys().forEach((key) => {
+        if (!key.startsWith('wallet_alert_threshold')) return;
+        const value = mmkvCache.getString(key);
+        if (value != null) walletThresholdCopies[key] = value;
+      });
+    } catch {
+      // ignore
+    }
 
     await SecureStorage.clearSession();
     try {
@@ -224,6 +236,9 @@ export const SecureStorage = {
     if (lastLoginMobile) {
       SecureStorage.setLastLoginMobile(lastLoginMobile);
     }
+    Object.entries(walletThresholdCopies).forEach(([key, value]) => {
+      mmkvCache.set(key, value);
+    });
   },
 };
 

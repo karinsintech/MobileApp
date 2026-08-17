@@ -42,15 +42,26 @@
 # Notifee / Firebase — missing keep rules cause release-only native crashes
 # when the first tray alert posts after login on OEM phones.
 -keep class app.notifee.** { *; }
+-keepnames class app.notifee.** { *; }
 -keep class io.invertase.firebase.** { *; }
 -keep class com.google.firebase.messaging.** { *; }
 
-# Notifee Room DB — R8 stripped NotifeeCoreDatabase and crashed RebootBroadcastReceiver
-# on Vivo/Android 16 release builds (log: Failed to create NotifeeCoreDatabase).
+# Notifee Room DB — R8 stripped NotifeeCoreDatabase / *_Impl and crashed
+# RebootBroadcastReceiver (Play: NotifeeCoreDatabase.a RuntimeException).
 -keep class * extends androidx.room.RoomDatabase { *; }
+-keep class * extends androidx.room.RoomDatabase
 -keep @androidx.room.Entity class *
+-keep @androidx.room.Dao class *
 -keep class app.notifee.core.database.** { *; }
+-keep class app.notifee.core.database.**_Impl { *; }
 -keep class app.notifee.core.RebootBroadcastReceiver { *; }
+
+# EventBus (Notifee internals) — stripped @Subscribe methods abort at init.
+-keep class org.greenrobot.eventbus.** { *; }
+-keepclassmembers class * {
+    @org.greenrobot.eventbus.Subscribe <methods>;
+}
+-keep enum org.greenrobot.eventbus.ThreadMode { *; }
 
 # OkHttp / Okio warnings that appear under full R8 optimize mode.
 -dontwarn okhttp3.**

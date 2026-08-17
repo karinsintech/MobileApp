@@ -69,7 +69,7 @@ function TollSpendCard({ tollSpend, loading, onViewAll }: TollSpendCardProps) {
           minimumFontScale={0.7}
           maxFontSizeMultiplier={MAX_FONT_SCALE}
         >
-          {loading && !tollSpend ? '—' : formatINR(selectedAmount, true)}
+          {loading && !tollSpend ? '—' : formatINR(selectedAmount)}
         </Text>
         <Text style={styles.heroTxns} maxFontSizeMultiplier={MAX_FONT_SCALE}>
           {selectedTxns > 0 ? `${selectedTxns.toLocaleString('en-IN')} txns` : '0 txns'}

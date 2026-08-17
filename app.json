@@ -4,7 +4,7 @@
   "expo": {
     "name": "KarinsFleet",
     "slug": "karins-fleet",
-    "version": "2.1.4",
+    "version": "2.1.5",
     "ios": {
       "bundleIdentifier": "com.karins"
     },

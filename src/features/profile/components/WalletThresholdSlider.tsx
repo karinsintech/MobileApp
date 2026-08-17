@@ -23,6 +23,7 @@ const THUMB_SIZE = 28;
 interface WalletThresholdSliderProps {
   value: number;
   onChange: (next: number) => void;
+  onDragStateChange?: (isDragging: boolean) => void;
   disabled?: boolean;
   minimumBalance?: number;
   defaultThreshold?: number;
@@ -31,6 +32,7 @@ interface WalletThresholdSliderProps {
 export function WalletThresholdSlider({
   value,
   onChange,
+  onDragStateChange,
   disabled = false,
   minimumBalance: _minimumBalance = 0,
   defaultThreshold: _defaultThreshold = 0,
@@ -42,9 +44,11 @@ export function WalletThresholdSlider({
   const trackLeftRef = useRef(0);
   const trackRef = useRef<View>(null);
   const onChangeRef = useRef(onChange);
+  const onDragStateChangeRef = useRef(onDragStateChange);
   const disabledRef = useRef(disabled);
 
   onChangeRef.current = onChange;
+  onDragStateChangeRef.current = onDragStateChange;
   disabledRef.current = disabled;
 
   const measureTrack = useCallback(() => {
@@ -64,10 +68,19 @@ export function WalletThresholdSlider({
 
   const panResponder = useMemo(
     () => PanResponder.create({
+      // Capture before the parent ScrollView so the thumb actually moves.
       onStartShouldSetPanResponder: () => !disabledRef.current,
+      onStartShouldSetPanResponderCapture: () => !disabledRef.current,
       onMoveShouldSetPanResponder: () => !disabledRef.current,
-      onPanResponderGrant: (evt) => updateFromPageX(evt.nativeEvent.pageX),
+      onMoveShouldSetPanResponderCapture: () => !disabledRef.current,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: (evt) => {
+        onDragStateChangeRef.current?.(true);
+        updateFromPageX(evt.nativeEvent.pageX);
+      },
       onPanResponderMove: (evt) => updateFromPageX(evt.nativeEvent.pageX),
+      onPanResponderRelease: () => onDragStateChangeRef.current?.(false),
+      onPanResponderTerminate: () => onDragStateChangeRef.current?.(false),
     }),
     [updateFromPageX],
   );

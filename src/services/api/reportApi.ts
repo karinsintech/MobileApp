@@ -58,6 +58,8 @@ export interface CustomerBalanceSummary {
   miscellaneousDebit?: number;
   accountTotalDebit?: number;
   accountClosingBalance?: number;
+  /** Corp P2C not yet paired as NETC — same field as web customer txn summary. */
+  inTransitAmount?: number;
 }
 
 export interface CustomerTollSummaryResponse {

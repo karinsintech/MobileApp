@@ -43,6 +43,7 @@ function BalanceSummaryCard({ summary }: { summary: CustomerBalanceSummary }) {
     ['Miscellaneous Debit', summary.miscellaneousDebit],
     ['Total Expenses', summary.accountTotalDebit],
     ['Closing Balance', summary.accountClosingBalance],
+    ['In Transit (Corp to Fastag)', summary.inTransitAmount],
   ];
 
   return (

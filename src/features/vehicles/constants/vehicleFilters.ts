@@ -55,6 +55,11 @@ export interface VehicleGroupOption {
   title: string;
 }
 
+/** VRN picker row — empty selection means the full customer fleet. */
+export interface VehicleNoOption {
+  vehicleNo: string;
+}
+
 export interface VehicleFilterMetaRow {
   yapStatus: string;
   customer?: {

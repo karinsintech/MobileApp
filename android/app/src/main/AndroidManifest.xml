@@ -77,5 +77,14 @@
         android:launchMode="singleTop"
         android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
         android:theme="@style/AppTheme" />
+      <!--
+        Notifee opens Room from this receiver on every boot. That native path
+        throws RuntimeException (NotifeeCoreDatabase) on some OEM / Android 16
+        devices. We never schedule trigger notifications, so reschedule-on-boot
+        is unused — removing it stops the production crash.
+      -->
+      <receiver
+        android:name="app.notifee.core.RebootBroadcastReceiver"
+        tools:node="remove" />
     </application>
 </manifest>

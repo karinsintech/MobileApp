@@ -6,6 +6,13 @@ export interface WalletDetailField {
   upiUrl?: string;
 }
 
+export interface VpaItem {
+  vId: number | string;
+  vrn: string;
+  vpa: string;
+  upiUrl?: string;
+}
+
 export interface CustomerProfileView {
   firstName: string;
   email: string;
@@ -21,6 +28,7 @@ export interface CustomerProfileView {
   fastagIdfc: WalletDetailField[];
   corporateYesBank: WalletDetailField[];
   corporateIdfc: WalletDetailField[];
+  vpaList: VpaItem[];
 }
 
 function mapWalletFields(details?: WalletBankDetails): WalletDetailField[] {
@@ -32,7 +40,7 @@ function mapWalletFields(details?: WalletBankDetails): WalletDetailField[] {
     },
     { label: 'AccNo', value: details?.accountNumber ?? '' },
     { label: 'IFSC', value: details?.ifsc ?? '' },
-    { label: 'UPI ID', value: details?.upi ?? '' },
+    { label: 'UPI ID', value: details?.upi ?? '', upiUrl: details?.upiUrl },
   ];
 }
 
@@ -52,6 +60,16 @@ export function mapCustomerProfileRow(data: CustomerProfileRow): CustomerProfile
     fastagIdfc: mapWalletFields(data.idfcWalletDetails),
     corporateYesBank: mapWalletFields(data.corporateWalletDetails),
     corporateIdfc: mapWalletFields(data.idfcCorporateWalletDetails),
+    // Same handle as web: NETC.{registration}@LIV for each vehicle on the profile.
+    vpaList: (data.vehicles ?? []).map((vehicle) => {
+      const vrn = (vehicle.vehicleNo ?? '').trim().toUpperCase();
+      return {
+        vId: vehicle.id ?? vrn,
+        vrn,
+        vpa: `NETC.${vrn}@LIV`,
+        upiUrl: vehicle.upiUrl,
+      };
+    }).filter((item) => item.vrn.length > 0),
   };
 }
 

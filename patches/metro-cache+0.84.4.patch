@@ -1,0 +1,39 @@
+diff --git a/node_modules/metro-cache/src/stores/FileStore.js b/node_modules/metro-cache/src/stores/FileStore.js
+index f3db2a0..b4d0dbe 100644
+--- a/node_modules/metro-cache/src/stores/FileStore.js
++++ b/node_modules/metro-cache/src/stores/FileStore.js
+@@ -66,13 +66,29 @@ class FileStore {
+   }
+   #removeDirs() {
+     for (let i = 0; i < 256; i++) {
+-      _fs.default.rmSync(
+-        _path.default.join(this.#root, ("0" + i.toString(16)).slice(-2)),
+-        {
++      const dir = _path.default.join(
++        this.#root,
++        ("0" + i.toString(16)).slice(-2),
++      );
++      try {
++        _fs.default.rmSync(dir, {
+           force: true,
+           recursive: true,
+-        },
+-      );
++        });
++      } catch (err) {
++        // Windows often throws ENOTEMPTY/EPERM while another Metro/antivirus
++        // still has files in Temp\metro-cache — skip and keep bundling.
++        if (
++          err &&
++          (err.code === "ENOTEMPTY" ||
++            err.code === "EPERM" ||
++            err.code === "EBUSY" ||
++            err.code === "ENOENT")
++        ) {
++          continue;
++        }
++        throw err;
++      }
+     }
+   }
+ }

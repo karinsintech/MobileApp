@@ -9,12 +9,15 @@ export const WALLET_THRESHOLD_MAX = 500_000;
 export const WALLET_THRESHOLD_STEP = 50;
 
 /** Snap a raw amount to the nearest valid slider step inside the allowed range. */
-export function snapWalletThreshold(value: number): number {
-  if (!Number.isFinite(value)) return WALLET_THRESHOLD_MIN;
+export function snapWalletThreshold(value: number | string): number {
+  // Coerce JSON/API strings ("150") — Number.isFinite("150") is false and would
+  // otherwise drop a persisted threshold back to ₹0 on reload.
+  const numeric = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numeric)) return WALLET_THRESHOLD_MIN;
 
   const clamped = Math.min(
     WALLET_THRESHOLD_MAX,
-    Math.max(WALLET_THRESHOLD_MIN, value),
+    Math.max(WALLET_THRESHOLD_MIN, numeric),
   );
 
   const stepIndex = Math.round((clamped - WALLET_THRESHOLD_MIN) / WALLET_THRESHOLD_STEP);

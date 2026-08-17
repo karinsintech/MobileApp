@@ -111,6 +111,10 @@ export default function DashboardScreen() {
       Cache.setJSON(cacheKey, normalized);
       syncDashboardNotifications(normalized, { userId: user?.userId, customerId });
       void syncBroadcastNotificationsFromApi();
+      void import('../../../services/notifications/walletAlertPreferences').then(
+        ({ hydrateWalletAlertThresholdFromApi }) =>
+          hydrateWalletAlertThresholdFromApi(user?.userId, customerId),
+      );
       setLastUpdated(new Date().toISOString());
     } catch (err: any) {
       setError(err?.message ?? 'Failed to load dashboard');

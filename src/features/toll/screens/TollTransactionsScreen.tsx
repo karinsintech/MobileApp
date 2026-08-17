@@ -431,7 +431,7 @@ export default function TollTransactionsScreen() {
     if (format === 'pdf' && !vehicleTerm) {
       Alert.alert(
         'Vehicle required',
-        'Please select search type Vehicle and enter Vehicle No before exporting PDF.',
+        'Select a vehicle before exporting PDF. All-vehicle PDFs are too large for this report.',
       );
       return;
     }

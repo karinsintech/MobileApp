@@ -1,6 +1,6 @@
 /**
- * Wallet low-balance rules — alert limit defaults to minimum balance × 1.5;
- * user override is stored locally on the device (web UI reference, no API sync).
+ * Wallet low-balance rules — same as web Fleet Dashboard Settings:
+ * alert = saved walletAlertThreshold, else operator minimum × 1.5.
  */
 
 import type { WalletInfo } from '../../types/dashboard';
@@ -15,28 +15,39 @@ export type { WalletAlertScope };
 
 /** Web uses 1.5× the stored minimum balance as the low-balance alert line. */
 export const WALLET_ALERT_MULTIPLIER = 1.5;
+/** Retired web default — treated as “use min × 1.5”, not a real custom limit. */
+export const LEGACY_WALLET_ALERT_THRESHOLD = 50_000;
 
-/** Alert threshold from dashboard minimum balance (×1.5). Returns 0 when min is unset. */
 export function computeWalletAlertThreshold(minimumBalance: number | null | undefined): number {
   const base = Number(minimumBalance) || 0;
   if (base <= 0) return 0;
   return Math.round(base * WALLET_ALERT_MULTIPLIER);
 }
 
-/** Default alert limit from server minimum balance — before any local override. */
+/** Zero or the old ₹50k default means “follow operator minimum × 1.5”. */
+export function isAutoWalletAlertThreshold(threshold: number | null | undefined): boolean {
+  const numeric = Number(threshold);
+  if (!Number.isFinite(numeric) || numeric <= 0) return true;
+  return numeric === LEGACY_WALLET_ALERT_THRESHOLD;
+}
+
 export function resolveDefaultWalletAlertThreshold(
   minimumBalance: number | null | undefined,
 ): number {
-  return snapWalletThreshold(computeWalletAlertThreshold(minimumBalance));
+  const computed = computeWalletAlertThreshold(minimumBalance);
+  if (computed > 0) return snapWalletThreshold(computed);
+  return LEGACY_WALLET_ALERT_THRESHOLD;
 }
 
-/** Effective alert limit: saved slider value first, else minimum × 1.5 default. */
+/** Effective alert limit — web user-preferences first, then min × 1.5. */
 export function resolveWalletAlertThreshold(
   minimumBalance: number | null | undefined,
   scope?: WalletAlertScope,
 ): number {
   const saved = getSavedWalletAlertThreshold(scope?.userId, scope?.customerId);
-  if (saved != null) return saved;
+  if (!isAutoWalletAlertThreshold(saved) && saved != null && saved > 0) {
+    return saved;
+  }
   return resolveDefaultWalletAlertThreshold(minimumBalance);
 }
 
@@ -47,7 +58,7 @@ export interface WalletLowBalanceState {
   alertThreshold: number;
 }
 
-/** True when balance is empty or below the effective alert limit. */
+/** True when balance is empty or below the effective (web) alert limit. */
 export function evaluateWalletLowBalance(
   wallet?: WalletInfo | null,
   scope?: WalletAlertScope,

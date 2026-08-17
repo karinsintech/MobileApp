@@ -4,7 +4,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, FlatList, StyleSheet, RefreshControl, TouchableOpacity, Alert,
+  View, Text, FlatList, StyleSheet, RefreshControl, TouchableOpacity,
 } from 'react-native';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { reportApi, type VehicleTollSummaryRow } from '../../../services/api/reportApi';
@@ -177,14 +177,8 @@ export default function VehicleTollSummaryScreen() {
   );
 
   const handleExport = async (format: 'excel' | 'pdf') => {
-    if (format === 'pdf' && !appliedFilters.vehicleNo.trim()) {
-      Alert.alert(
-        'Vehicle required',
-        'Please select Vehicle No in filters and apply before exporting PDF.',
-      );
-      return;
-    }
-
+    // Monthly summary is small enough for an all-vehicle PDF. Line-item
+    // Toll Transactions still require a VRN before PDF export.
     setShowExportMenu(false);
     setExporting(format);
 

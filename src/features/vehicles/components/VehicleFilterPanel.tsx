@@ -2,6 +2,9 @@
  * Fleet vehicle filters — mirrors web VehicleHeader (customer, agent, vehicle no,
  * class, tag ID, group, ON/OFF status, YAP vehicle status). Search submits the
  * same query keys to the backend; no client-side rematch.
+ *
+ * Vehicle No defaults to All vehicles so customers can list/PDF the full fleet.
+ * Toll transaction PDFs still require a VRN (volume), not this screen.
  */
 
 import React, { useMemo, useState } from 'react';
@@ -19,6 +22,7 @@ import {
   type CustomerFilterOption,
   type AgentFilterOption,
   type VehicleGroupOption,
+  type VehicleNoOption,
 } from '../constants/vehicleFilters';
 
 interface VehicleFilterPanelProps {
@@ -28,6 +32,7 @@ interface VehicleFilterPanelProps {
   customers: CustomerFilterOption[];
   agents: AgentFilterOption[];
   groupOptions: VehicleGroupOption[];
+  vehicles?: VehicleNoOption[];
   vehicleStatusOptions: string[];
   onChange: (next: VehicleFilters) => void;
   onAgentChange: (agentId: string) => void;
@@ -82,6 +87,7 @@ export default function VehicleFilterPanel({
   customers,
   agents,
   groupOptions,
+  vehicles = [],
   vehicleStatusOptions,
   onChange,
   onAgentChange,
@@ -89,6 +95,7 @@ export default function VehicleFilterPanel({
   onReset,
 }: VehicleFilterPanelProps) {
   const [customerOpen, setCustomerOpen] = useState(false);
+  const [vehicleOpen, setVehicleOpen] = useState(false);
   const [agentOpen, setAgentOpen] = useState(false);
   const [groupOpen, setGroupOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
@@ -105,11 +112,22 @@ export default function VehicleFilterPanel({
     );
   }, [roleKey, vehicleStatusOptions]);
 
+  const uniqueVehicles = useMemo(() => {
+    const seen = new Set<string>();
+    return vehicles.filter((vehicle) => {
+      // Deduplicate VRNs so the picker can default to All vehicles.
+      if (!vehicle.vehicleNo || seen.has(vehicle.vehicleNo)) return false;
+      seen.add(vehicle.vehicleNo);
+      return true;
+    });
+  }, [vehicles]);
+
   const customerLabel = customers.find((c) => c.yapEntityId === draft.customerId)
     ? `${draft.customerId} - ${customers.find((c) => c.yapEntityId === draft.customerId)?.firstName ?? ''}`
     : 'All customers';
 
   const agentLabel = agents.find((a) => String(a.id) === agentId)?.agentName ?? 'All agents';
+  const vehicleLabel = draft.vehicleNo || 'All vehicles';
   const groupLabel = draft.group || 'All groups';
   const onOffLabel = VEHICLE_ON_OFF_OPTIONS.find((o) => o.value === draft.status)?.label ?? 'All';
   const yapLabel = draft.vehicleStatus || 'All status';
@@ -125,16 +143,20 @@ export default function VehicleFilterPanel({
       ) : null}
 
       <View style={styles.row}>
-        <TextInput
-          style={styles.input}
-          placeholder="Vehicle No"
-          placeholderTextColor={Colors.text.subtle}
-          value={draft.vehicleNo}
-          onChangeText={(vehicleNo) => onChange({ ...draft, vehicleNo })}
-          autoCapitalize="characters"
-          returnKeyType="search"
-          onSubmitEditing={onSearch}
-        />
+        {uniqueVehicles.length > 0 ? (
+          <SelectField label="Vehicle No" value={vehicleLabel} onPress={() => setVehicleOpen(true)} />
+        ) : (
+          <TextInput
+            style={styles.input}
+            placeholder="All vehicles"
+            placeholderTextColor={Colors.text.subtle}
+            value={draft.vehicleNo}
+            onChangeText={(vehicleNo) => onChange({ ...draft, vehicleNo })}
+            autoCapitalize="characters"
+            returnKeyType="search"
+            onSubmitEditing={onSearch}
+          />
+        )}
         <TextInput
           style={styles.input}
           placeholder="Vehicle Class"
@@ -172,6 +194,29 @@ export default function VehicleFilterPanel({
           <Text style={styles.resetText}>Reset</Text>
         </TouchableOpacity>
       </View>
+
+      <PickerModal visible={vehicleOpen} title="Vehicle No" onClose={() => setVehicleOpen(false)}>
+        <TouchableOpacity
+          style={styles.modalItem}
+          onPress={() => { onChange({ ...draft, vehicleNo: '' }); setVehicleOpen(false); }}
+        >
+          <Text style={styles.modalItemText}>All vehicles</Text>
+        </TouchableOpacity>
+        {uniqueVehicles.map((vehicle) => (
+          <TouchableOpacity
+            key={vehicle.vehicleNo}
+            style={styles.modalItem}
+            onPress={() => {
+              onChange({ ...draft, vehicleNo: vehicle.vehicleNo });
+              setVehicleOpen(false);
+            }}
+          >
+            <Text style={[styles.modalItemText, draft.vehicleNo === vehicle.vehicleNo && styles.modalItemActive]}>
+              {vehicle.vehicleNo}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </PickerModal>
 
       <PickerModal visible={customerOpen} title="Customer" onClose={() => setCustomerOpen(false)}>
         <TouchableOpacity

@@ -53,4 +53,27 @@ export const dashboardApi = {
       '/fleet-dashboard/vehicle-search',
       { params: { q } },
     ),
+
+  /** Same row the web Settings drawer reads — includes walletAlertThreshold. */
+  getUserPreferences: () =>
+    apiClient.get<{ preferences: FleetUserPreferences | null }>(
+      '/fleet-dashboard/user-preferences',
+    ),
+
+  /** Partial upsert — omitted fields are left unchanged on the server. */
+  saveUserPreferences: (prefs: Partial<FleetUserPreferences>) =>
+    apiClient.post<{ success?: boolean; preferences?: FleetUserPreferences }>(
+      '/fleet-dashboard/user-preferences',
+      prefs,
+    ),
 };
+
+/** Mirrors web FleetDashboard UserPreferences (wallet alert lives here, not on customer). */
+export interface FleetUserPreferences {
+  density?: 'compact' | 'comfortable';
+  defaultPeriod?: string;
+  walletAlertThreshold?: number;
+  notifyWallet?: boolean;
+  notifyChallan?: boolean;
+  notifyNews?: boolean;
+}

@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { vehicleApi } from '../../../services/api/vehicleApi';
+import { reportApi } from '../../../services/api/reportApi';
 import { apiClient, getApiErrorMessage } from '../../../services/api/client';
 import { useAppSelector, selectAuthState } from '../../../store';
 import { LiquidBackground, GlassCard, SkeletonCard, EmptyState, ScreenHeader } from '../../../components';
@@ -37,6 +38,7 @@ import {
   type AgentFilterOption,
   type VehicleFilterMetaRow,
   type VehicleGroupOption,
+  type VehicleNoOption,
 } from '../constants/vehicleFilters';
 
 /**
@@ -78,8 +80,11 @@ function buildVehicleQueryParams(
   // Web Form.Item name="group" → group title string.
   if (filters.group.trim()) params.group = filters.group.trim();
 
-  if (filters.status.trim()) params.status = filters.status.trim();
-  if (filters.vehicleStatus.trim()) params.vehicleStatus = filters.vehicleStatus.trim();
+  // Card tap sets vehicleStatuses; form status fields apply only after Search (no card).
+  if (!cardConfig) {
+    if (filters.status.trim()) params.status = filters.status.trim();
+    if (filters.vehicleStatus.trim()) params.vehicleStatus = filters.vehicleStatus.trim();
+  }
 
   return params;
 }
@@ -118,6 +123,7 @@ export default function VehiclesScreen() {
   const [customers, setCustomers] = useState<CustomerFilterOption[]>([]);
   const [agents, setAgents] = useState<AgentFilterOption[]>([]);
   const [groupOptions, setGroupOptions] = useState<VehicleGroupOption[]>([]);
+  const [vehicleOptions, setVehicleOptions] = useState<VehicleNoOption[]>([]);
   const [vehicleStatusOptions, setVehicleStatusOptions] = useState<string[]>([]);
   const [showFilters, setShowFilters] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
@@ -154,6 +160,24 @@ export default function VehiclesScreen() {
       } catch { /* optional filter source */ }
     })();
   }, [user?.roleKey]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await reportApi.getCustomerVehicleList();
+        const seen = new Set<string>();
+        const options: VehicleNoOption[] = [];
+        (data ?? []).forEach((customer) => {
+          (customer.vehicles ?? []).forEach((vehicle) => {
+            if (!vehicle.vehicleNo || seen.has(vehicle.vehicleNo)) return;
+            seen.add(vehicle.vehicleNo);
+            options.push({ vehicleNo: vehicle.vehicleNo });
+          });
+        });
+        setVehicleOptions(options);
+      } catch { /* typed VRN picker falls back to free text */ }
+    })();
+  }, []);
 
   useEffect(() => {
     if (!canShowAgentFilter(user?.roleKey)) return;
@@ -266,17 +290,10 @@ export default function VehiclesScreen() {
     setActiveCard('total');
   };
 
-  // Export uses the same payload as the list; PDF requires vehicleNo (web parity).
+  // Same filters as the list. Empty vehicleNo = full fleet PDF (customers).
+  // Toll transaction PDFs still require a VRN because that file is too large.
   const handleExport = async (format: 'excel' | 'pdf') => {
     if (exporting) return;
-
-    if (format === 'pdf' && !appliedFilters.vehicleNo.trim()) {
-      Alert.alert(
-        'Vehicle required',
-        'Please choose vehicle no in filter',
-      );
-      return;
-    }
 
     const listParams = buildVehicleQueryParams(
       activeCardConfig,
@@ -472,6 +489,7 @@ export default function VehiclesScreen() {
           customers={customers}
           agents={agents}
           groupOptions={groupOptions}
+          vehicles={vehicleOptions}
           vehicleStatusOptions={vehicleStatusOptions}
           onChange={handleDraftChange}
           onAgentChange={setAgentId}

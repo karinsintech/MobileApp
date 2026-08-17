@@ -2,11 +2,13 @@
  * Bank / wallet account blocks on Profile — mirrors web UserProfile wallet grids.
  */
 
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Share, Alert } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Share, Alert, type LayoutChangeEvent } from 'react-native';
 import { GlassCard } from '../../../components';
+import { CopyIcon } from '../../../components/icons';
 import { Colors, FontSize, Spacing } from '../../../theme';
 import type { WalletDetailField } from '../utils/mapCustomerProfile';
+import { openUpiPayment } from '../utils/upiPayment';
 
 const ADMIN_WALLET = {
   accountNumber: 'QWALLET01LQPARTNER20',
@@ -36,13 +38,18 @@ async function copyAll(fields: WalletDetailField[], title: string) {
   }
 }
 
+function fontSizeToFit(text: string, columnWidth: number): number {
+  const chars = Math.max(text.trim().length, 1);
+  const width = Math.max(columnWidth, 40);
+  return Math.min(11, Math.max(7, Math.floor(width / (chars * 0.62))));
+}
+
 function DetailRow({
   label,
   yesValue,
   idfcValue,
   onCopyYes,
   onCopyIdfc,
-  large = false,
 }: {
   label: string;
   yesValue: string;
@@ -53,43 +60,40 @@ function DetailRow({
 }) {
   const isUpiId = label === 'UPI ID';
   const expandYesOverIdfc = isUpiId && !idfcValue.trim();
-  const isAccName = label === 'AccName';
-  const isAccountNumber = label === 'AccNo';
-  const isCompactValue = isAccName || isAccountNumber || label === 'IFSC';
+  const [colWidth, setColWidth] = useState(110);
 
-  const renderValue = (value: string, wide = false, compact = false) => (
+  const onColLayout = (event: LayoutChangeEvent) => {
+    const next = Math.floor(event.nativeEvent.layout.width);
+    if (next > 0 && Math.abs(next - colWidth) > 2) setColWidth(next);
+  };
+
+  const renderValue = (value: string) => (
     <Text
-      style={[
-        styles.valueText,
-        large && styles.valueTextLarge,
-        wide && styles.valueTextWide,
-        compact && styles.valueTextCompact,
-        large && compact && styles.valueTextCompactLarge,
-        isAccountNumber && styles.valueTextAccountNumber,
-        large && isAccountNumber && styles.valueTextAccountNumberLarge,
-      ]}
+      style={[styles.valueText, { fontSize: fontSizeToFit(value || '—', colWidth) }]}
       selectable
       numberOfLines={1}
-      adjustsFontSizeToFit={isCompactValue || wide}
-      minimumFontScale={compact ? 0.5 : 0.6}
+      allowFontScaling={false}
     >
       {value || '—'}
     </Text>
   );
 
   return (
-    <View style={[styles.row, large && styles.rowLarge]}>
-      <Text style={[styles.rowLabel, large && styles.rowLabelLarge]}>{label}</Text>
+    <View style={styles.row}>
+      <Text style={styles.rowLabel} numberOfLines={1} allowFontScaling={false}>
+        {label}
+      </Text>
       <TouchableOpacity
         style={[styles.valueCol, expandYesOverIdfc && styles.valueColWide]}
         onPress={onCopyYes}
         disabled={!yesValue}
+        onLayout={onColLayout}
       >
-        {renderValue(yesValue, expandYesOverIdfc)}
+        {renderValue(yesValue)}
       </TouchableOpacity>
       {expandYesOverIdfc ? null : (
-        <TouchableOpacity style={styles.valueCol} onPress={onCopyIdfc} disabled={!idfcValue}>
-          {renderValue(idfcValue, false, isAccName)}
+        <TouchableOpacity style={styles.valueCol} onPress={onCopyIdfc} disabled={!idfcValue} onLayout={onColLayout}>
+          {renderValue(idfcValue)}
         </TouchableOpacity>
       )}
     </View>
@@ -97,16 +101,20 @@ function DetailRow({
 }
 
 function UpiBox({
-  yesLabel,
-  idfcLabel,
   yesUpi,
   idfcUpi,
+  yesUpiUrl,
+  idfcUpiUrl,
+  yesPayeeName,
+  idfcPayeeName,
   large = false,
 }: {
-  yesLabel: string;
-  idfcLabel: string;
   yesUpi: string;
   idfcUpi: string;
+  yesUpiUrl?: string;
+  idfcUpiUrl?: string;
+  yesPayeeName?: string;
+  idfcPayeeName?: string;
   large?: boolean;
 }) {
   // Render UPI IDs in their own full-width card so long handles are fully readable
@@ -121,27 +129,51 @@ function UpiBox({
         <Text style={[styles.upiBoxHeaderText, large && styles.upiBoxHeaderTextLarge]}>UPI ID</Text>
       </View>
       {hasYes ? (
-        <TouchableOpacity
-          style={styles.upiRow}
-          onPress={() => copyText('UPI ID', yesUpi)}
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.upiValue, large && styles.upiValueLarge]} selectable numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
-            {yesUpi}
-          </Text>
-        </TouchableOpacity>
+        <View style={styles.upiRow}>
+          <TouchableOpacity
+            style={styles.upiLinkHit}
+            onPress={() => openUpiPayment(yesUpi, yesUpiUrl, yesPayeeName)}
+            activeOpacity={0.7}
+          >
+            <Text
+              style={[styles.upiLink, large && styles.upiLinkLarge]}
+              numberOfLines={1}
+              allowFontScaling={false}
+            >
+              {yesUpi}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => { void copyText('UPI ID', yesUpi); }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <CopyIcon size={16} color={Colors.blue} />
+          </TouchableOpacity>
+        </View>
       ) : null}
       {hasYes && hasIdfc ? <View style={styles.upiDivider} /> : null}
       {hasIdfc ? (
-        <TouchableOpacity
-          style={styles.upiRow}
-          onPress={() => copyText('UPI ID', idfcUpi)}
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.upiValue, large && styles.upiValueLarge]} selectable numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
-            {idfcUpi}
-          </Text>
-        </TouchableOpacity>
+        <View style={styles.upiRow}>
+          <TouchableOpacity
+            style={styles.upiLinkHit}
+            onPress={() => openUpiPayment(idfcUpi, idfcUpiUrl, idfcPayeeName)}
+            activeOpacity={0.7}
+          >
+            <Text
+              style={[styles.upiLink, large && styles.upiLinkLarge]}
+              numberOfLines={1}
+              allowFontScaling={false}
+            >
+              {idfcUpi}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => { void copyText('UPI ID', idfcUpi); }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <CopyIcon size={16} color={Colors.blue} />
+          </TouchableOpacity>
+        </View>
       ) : null}
     </GlassCard>
   );
@@ -167,6 +199,12 @@ function WalletGrid({
   const nonUpiIdfc = idfcBank.filter((f) => f.label !== 'UPI ID');
   const yesUpi = yesBank.find((f) => f.label === 'UPI ID')?.value ?? '';
   const idfcUpi = idfcBank.find((f) => f.label === 'UPI ID')?.value ?? '';
+  const yesUpiUrl = yesBank.find((f) => f.label === 'UPI ID')?.upiUrl
+    ?? yesBank.find((f) => f.label === 'AccName')?.upiUrl;
+  const idfcUpiUrl = idfcBank.find((f) => f.label === 'UPI ID')?.upiUrl
+    ?? idfcBank.find((f) => f.label === 'AccName')?.upiUrl;
+  const yesPayeeName = yesBank.find((f) => f.label === 'AccName')?.value;
+  const idfcPayeeName = idfcBank.find((f) => f.label === 'AccName')?.value;
 
   return (
   <View style={styles.block}>
@@ -183,9 +221,9 @@ function WalletGrid({
     </View>
     <GlassCard style={styles.gridCard} noPadding>
       <View style={[styles.row, styles.headerRow, large && styles.headerRowLarge]}>
-        <Text style={[styles.headerCell, styles.headerCellField, large && styles.headerCellLarge, large && styles.headerCellFieldLarge]}>Field</Text>
-        <Text style={[styles.headerCell, large && styles.headerCellLarge]}>{yesLabel}</Text>
-        <Text style={[styles.headerCell, large && styles.headerCellLarge, large && styles.headerCellIdfc]}>{idfcLabel}</Text>
+        <Text style={[styles.headerCell, styles.headerCellField]} numberOfLines={1} allowFontScaling={false}>Field</Text>
+        <Text style={styles.headerCell} numberOfLines={1} allowFontScaling={false}>{yesLabel}</Text>
+        <Text style={styles.headerCell} numberOfLines={1} allowFontScaling={false}>{idfcLabel}</Text>
       </View>
       {nonUpiYes.map((item, index) => (
         <DetailRow
@@ -200,10 +238,12 @@ function WalletGrid({
       ))}
     </GlassCard>
     <UpiBox
-      yesLabel={yesLabel}
-      idfcLabel={idfcLabel}
       yesUpi={yesUpi}
       idfcUpi={idfcUpi}
+      yesUpiUrl={yesUpiUrl}
+      idfcUpiUrl={idfcUpiUrl}
+      yesPayeeName={yesPayeeName}
+      idfcPayeeName={idfcPayeeName}
       large={large}
     />
   </View>
@@ -223,7 +263,7 @@ export function AdminWalletSection() {
           <Text style={styles.adminLabel}>IFSC</Text>
           <Text style={styles.adminValue} selectable>{ADMIN_WALLET.ifsc}</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => copyText('UPI ID', ADMIN_WALLET.upiId)}>
+        <TouchableOpacity onPress={() => openUpiPayment(ADMIN_WALLET.upiId, undefined, ADMIN_WALLET.accountNumber)}>
           <Text style={styles.adminLabel}>UPI ID</Text>
           <Text style={styles.adminValue} selectable>{ADMIN_WALLET.upiId}</Text>
         </TouchableOpacity>
@@ -253,7 +293,7 @@ export function AgentWalletSection({
           <Text style={styles.adminLabel}>IFSC</Text>
           <Text style={styles.adminValue} selectable>{ifsc || '—'}</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => copyText('UPI ID', upiId)}>
+        <TouchableOpacity onPress={() => openUpiPayment(upiId)}>
           <Text style={styles.adminLabel}>UPI ID</Text>
           <Text style={styles.adminValue} selectable>{upiId || '—'}</Text>
         </TouchableOpacity>
@@ -279,11 +319,10 @@ export function CustomerWalletSections({
     <>
       <WalletGrid
         title="FASTag Account Information"
-        yesLabel="FASTag YES Bank"
-        idfcLabel="FASTag IDFC"
+        yesLabel="YES Bank"
+        idfcLabel="IDFC"
         yesBank={fastagYesBank}
         idfcBank={fastagIdfc}
-        large
       />
       {showCorporate ? (
         <WalletGrid
@@ -304,9 +343,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
     marginBottom: 8,
   },
   blockTitle: {
+    flex: 1,
+    minWidth: 120,
     fontSize: FontSize.sm,
     fontWeight: '700',
     color: Colors.infoLight,
@@ -317,11 +360,12 @@ const styles = StyleSheet.create({
   copyActions: { flexDirection: 'row', gap: 12 },
   copyLink: { fontSize: FontSize.xs, color: Colors.blue, fontWeight: '600' },
   copyLinkLarge: { fontSize: FontSize.sm },
-  gridCard: { overflow: 'hidden' },
-  headerRow: { backgroundColor: Colors.blue, paddingVertical: 8 },
+  gridCard: {},
+  headerRow: { backgroundColor: Colors.blue, height: 36, alignItems: 'center' },
   headerRowLarge: { paddingVertical: 10 },
   headerCell: {
     flex: 1,
+    minWidth: 0,
     fontSize: FontSize.xs,
     fontWeight: '700',
     color: Colors.white,
@@ -336,7 +380,7 @@ const styles = StyleSheet.create({
   },
   headerCellField: {
     flex: 0,
-    width: 72,
+    width: 58,
     textAlign: 'left',
     paddingLeft: 4,
   },
@@ -345,43 +389,35 @@ const styles = StyleSheet.create({
   },
   row: {
     flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 36,
     borderBottomWidth: 1,
     borderBottomColor: Colors.divider,
-    paddingVertical: 8,
     paddingHorizontal: 6,
-    alignItems: 'center',
-  },
-  rowLarge: {
-    paddingVertical: 11,
-    paddingHorizontal: 8,
   },
   rowLabel: {
-    width: 72,
+    width: 58,
     flexShrink: 0,
-    fontSize: FontSize.xs,
+    fontSize: 11,
+    lineHeight: 16,
     color: Colors.text.subtle,
     fontWeight: '600',
     textAlign: 'left',
-  },
-  rowLabelLarge: {
-    width: 84,
-    fontSize: FontSize.sm,
+    includeFontPadding: false,
   },
   valueCol: {
     flex: 1,
-    paddingHorizontal: 4,
+    paddingHorizontal: 3,
     minWidth: 0,
-    alignItems: 'flex-start',
     justifyContent: 'center',
   },
-  // UPI row: span YES + empty IDFC so the full handle is readable.
   valueColWide: { flex: 2 },
   valueText: {
-    width: '100%',
-    fontSize: FontSize.xs,
+    fontSize: 10,
+    lineHeight: 16,
     color: Colors.white,
     textAlign: 'left',
-    fontFamily: 'monospace',
+    includeFontPadding: false,
   },
   valueTextLarge: {
     fontSize: FontSize.sm,
@@ -415,15 +451,22 @@ const styles = StyleSheet.create({
   },
   upiBoxHeaderTextLarge: { fontSize: FontSize.sm },
   upiRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 12,
     paddingVertical: 10,
+    gap: 8,
   },
-  upiValue: {
-    fontSize: FontSize.xs,
-    color: Colors.white,
-    fontFamily: 'monospace',
+  upiLinkHit: { flex: 1, minWidth: 0 },
+  upiLink: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: Colors.blue,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
+    includeFontPadding: false,
   },
-  upiValueLarge: { fontSize: FontSize.sm },
+  upiLinkLarge: { fontSize: FontSize.sm },
   upiDivider: { height: 1, backgroundColor: Colors.divider, marginHorizontal: 12 },
   adminCard: { gap: 12, padding: Spacing[4] },
   adminLabel: { fontSize: FontSize.xs, color: Colors.text.label, marginBottom: 2 },

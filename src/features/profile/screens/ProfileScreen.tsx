@@ -33,6 +33,7 @@ import {
   saveNotificationPreferences,
 } from '../../../services/notifications/notificationPreferences';
 import { resolveWalletAlertThreshold } from '../../../services/notifications/walletAlertUtils';
+import { hydrateWalletAlertThresholdFromApi } from '../../../services/notifications/walletAlertPreferences';
 import { formatINR } from '../../../utils/format';
 import type { DashboardSummary } from '../../../types/dashboard';
 import { resolveActiveCustomerId } from '../../../types/auth';
@@ -41,6 +42,7 @@ import {
   AgentWalletSection,
   CustomerWalletSections,
 } from '../components/BankWalletSection';
+import { UpiVpaSection } from '../components/UpiVpaSection';
 
 interface SettingRowProps {
   icon: string;
@@ -147,11 +149,17 @@ export default function ProfileScreen() {
       `dashboard_snapshot:${user?.userId ?? 'anon'}:${customerId ?? 'self'}`,
     );
     const minimumBalance = cached?.wallet?.minimumBalance ?? 0;
-    const threshold = resolveWalletAlertThreshold(minimumBalance, {
-      userId: user?.userId,
-      customerId,
-    });
-    setLowBalanceThresholdLabel(formatINR(threshold));
+
+    const applyLabel = () => {
+      const threshold = resolveWalletAlertThreshold(minimumBalance, {
+        userId: user?.userId,
+        customerId,
+      });
+      setLowBalanceThresholdLabel(formatINR(threshold));
+    };
+
+    applyLabel();
+    void hydrateWalletAlertThresholdFromApi(user?.userId, customerId).then(applyLabel);
   }, [fetchBankInfo, user?.userId, customerId]));
 
   const handleToggleNotification = useCallback((
@@ -302,6 +310,10 @@ export default function ProfileScreen() {
             <Text style={styles.emptyBank}>No bank details available for this account.</Text>
           </GlassCard>
         )}
+
+        {profile && canShowCustomerBankInfo(user?.roleKey) ? (
+          <UpiVpaSection items={profile.vpaList} />
+        ) : null}
 
         <Text style={styles.sectionLabel}>SECURITY</Text>
         <GlassCard style={styles.section}>

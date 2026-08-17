@@ -53,6 +53,12 @@ const ANDROID_NOTIFICATION_SMALL_ICON_FALLBACKS = [
   ANDROID_NOTIFICATION_SMALL_ICON,
   'ic_launcher',
 ] as const;
+/**
+ * Full-color K launcher shown as the left tray avatar (Twitter-style).
+ * smallIcon stays a white silhouette for the status bar; without largeIcon
+ * some OEMs promote that silhouette (the bell) to the whole left slot.
+ */
+const ANDROID_NOTIFICATION_LARGE_ICON = 'ic_launcher';
 /** Matches android/app/src/main/res/values/colors.xml notification_accent. */
 const ANDROID_NOTIFICATION_COLOR = '#16B7F3';
 let openHandlersRegistered = false;
@@ -108,6 +114,9 @@ function buildAndroidDisplayOptions(
     channelId: ANDROID_CHANNEL_ID,
     pressAction: { id: 'default' as const },
     smallIcon: options?.smallIcon ?? resolvedAndroidSmallIcon ?? ANDROID_NOTIFICATION_SMALL_ICON,
+    // K logo in the shade; bell remains the status-bar / badge overlay.
+    largeIcon: ANDROID_NOTIFICATION_LARGE_ICON,
+    circularLargeIcon: true,
     color: ANDROID_NOTIFICATION_COLOR,
     importance: AndroidImportance.HIGH,
     sound: 'default',
@@ -167,6 +176,8 @@ async function displayWithSafeAndroidIcon(
         android: {
           channelId: ANDROID_CHANNEL_ID,
           pressAction: { id: 'default' as const },
+          largeIcon: ANDROID_NOTIFICATION_LARGE_ICON,
+          circularLargeIcon: true,
           color: ANDROID_NOTIFICATION_COLOR,
           importance: AndroidImportance.HIGH,
           sound: 'default',
