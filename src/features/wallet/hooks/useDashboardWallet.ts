@@ -12,8 +12,9 @@ import {
   requiresAdminContextPicker,
   resolveActiveCustomerId,
 } from '../../../types/auth';
-import type { WalletInfo } from '../../../types/dashboard';
+import type { DashboardSummary, WalletInfo } from '../../../types/dashboard';
 import { normalizeDashboardSummary } from '../../dashboard/utils/dashboardSummaryUtils';
+import { sanitizeDashboardSnapshot } from '../../dashboard/utils/sanitizeDashboardSnapshot';
 
 const CACHE_KEY = 'dashboard_snapshot';
 
@@ -47,8 +48,11 @@ export function useDashboardWallet() {
       });
       const normalized = normalizeDashboardSummary(data);
       setWallet(normalized.wallet ?? null);
-      const existing = Cache.getJSON<Record<string, unknown>>(CACHE_KEY) ?? {};
-      Cache.setJSON(CACHE_KEY, { ...existing, wallet: normalized.wallet });
+      const existing = Cache.getJSON<DashboardSummary>(CACHE_KEY) ?? ({} as DashboardSummary);
+      Cache.setJSON(CACHE_KEY, sanitizeDashboardSnapshot({
+        ...existing,
+        wallet: normalized.wallet,
+      }));
     } catch (err: any) {
       setError(err?.message ?? 'Failed to load wallet');
     } finally {

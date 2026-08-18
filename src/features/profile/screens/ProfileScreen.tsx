@@ -240,8 +240,7 @@ export default function ProfileScreen() {
         text: 'Sign Out',
         style: 'destructive',
         onPress: async () => {
-          const deviceId = await SecureStorage.getDeviceId() ?? 'unknown';
-          await dispatch(signOut(deviceId));
+          await dispatch(signOut());
         },
       },
     ]);

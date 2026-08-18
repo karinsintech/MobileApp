@@ -1,20 +1,20 @@
 /**
- * Secure session storage — Keychain for tokens, MMKV for non-secret metadata.
- * Keychain ops are best-effort: cloud iOS simulators (Appetize) can throw on
- * reset/set; a silent failure must never block password sign-in.
+ * Secure session storage — Keychain for the JWT, encrypted MMKV for metadata.
+ * Production never writes the bearer token to MMKV. Dev-only iOS fallback exists
+ * for Appetize / Simulator Keychain failures.
  */
 
 import * as Keychain from 'react-native-keychain';
 import { Platform } from 'react-native';
-import { MMKV } from 'react-native-mmkv';
+import { IS_DEV } from '../../config/env';
 import { clearHttpCookies } from '../auth/httpCookies';
+import {
+  getAuthMetaStore,
+  getCacheStore,
+  getWalletAlertStore,
+  isEncryptedMmkvReady,
+} from './encryptedMmkv';
 
-// MMKV for non-sensitive cache (last dashboard snapshot, etc.)
-export const mmkvCache = new MMKV({ id: 'karins-fleet-cache' });
-
-// Separate store for the restore gate — not wiped by mmkvCache.clearAll() so logout
-// can block cold-start re-login even if a cookie refresh writes a stray token.
-const authMeta = new MMKV({ id: 'karins-fleet-auth-meta' });
 const CAN_RESTORE_SESSION_KEY = 'can_restore_session';
 /** Device-level — remembers the mobile used for quick PIN login. */
 const PIN_LOGIN_MOBILE_KEY = 'pin_login_mobile_number';
@@ -26,10 +26,10 @@ const KEYCHAIN_KEYS = {
   deviceId: 'device_id',
 } as const;
 
-// Fallback when iOS Keychain is unavailable (Appetize / broken simulator keychain).
+// Dev-only when iOS Keychain is unavailable (Appetize / broken simulator).
 const MMKV_ACCESS_TOKEN_KEY = 'access_token_fallback';
 
-// Non-secret session metadata (role, customer, display name) kept in MMKV so the
+// Session metadata (role, customer, display name) kept in encrypted MMKV so the
 // app can rehydrate the logged-in user on cold start without a network round-trip.
 const SESSION_USER_KEY = 'session_user';
 const DASHBOARD_CONTEXT_KEY = 'dashboard_context';
@@ -37,8 +37,16 @@ const DASHBOARD_CONTEXT_KEY = 'dashboard_context';
 // Last successful password login mobile — used for PIN setup and quick login.
 const LAST_LOGIN_MOBILE_KEY = 'last_login_mobile';
 
-/** AFTER_FIRST_UNLOCK is the most reliable option on Appetize / iOS Simulator. */
-const TOKEN_ACCESSIBLE = Keychain.ACCESSIBLE.AFTER_FIRST_UNLOCK;
+// After first unlock: backgroundFleetSync still works after reboot; no iCloud copy.
+const TOKEN_ACCESSIBLE = Keychain.ACCESSIBLE.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY;
+
+function cache() {
+  return getCacheStore();
+}
+
+function authMeta() {
+  return getAuthMetaStore();
+}
 
 export const SecureStorage = {
   // ── Access Token ─────────────────────────────────────────────────────────
@@ -52,13 +60,12 @@ export const SecureStorage = {
           accessible: TOKEN_ACCESSIBLE,
         },
       );
-      // Clear any prior MMKV fallback once Keychain write succeeds.
-      mmkvCache.delete(MMKV_ACCESS_TOKEN_KEY);
+      cache().delete(MMKV_ACCESS_TOKEN_KEY);
       return;
     } catch {
-      // Appetize / simulator Keychain often rejects writes — keep session alive in MMKV.
-      if (Platform.OS === 'ios') {
-        mmkvCache.set(MMKV_ACCESS_TOKEN_KEY, token);
+      // Simulator / Appetize only — never persist a production JWT in MMKV.
+      if (IS_DEV && Platform.OS === 'ios') {
+        cache().set(MMKV_ACCESS_TOKEN_KEY, token);
         return;
       }
       throw new Error('Could not save access token on this device.');
@@ -70,9 +77,12 @@ export const SecureStorage = {
       const creds = await Keychain.getGenericPassword({ service: KEYCHAIN_SERVICE });
       if (creds && creds.username === KEYCHAIN_KEYS.accessToken) return creds.password;
     } catch {
-      // Fall through to MMKV fallback below.
+      // Fall through to the gated MMKV fallback below.
     }
-    return mmkvCache.getString(MMKV_ACCESS_TOKEN_KEY) ?? null;
+    if (IS_DEV) {
+      return cache().getString(MMKV_ACCESS_TOKEN_KEY) ?? null;
+    }
+    return null;
   },
 
   async removeAccessToken(): Promise<void> {
@@ -81,58 +91,62 @@ export const SecureStorage = {
     } catch {
       // Ignore — missing/broken Keychain must not block sign-in cleanup.
     }
-    mmkvCache.delete(MMKV_ACCESS_TOKEN_KEY);
+    cache().delete(MMKV_ACCESS_TOKEN_KEY);
   },
 
   // ── Quick PIN login preference (device-level) ────────────────────────────
   isPinLoginEnabled(): boolean {
-    return mmkvCache.getBoolean(PIN_LOGIN_ENABLED_KEY) ?? false;
+    return cache().getBoolean(PIN_LOGIN_ENABLED_KEY) ?? false;
   },
 
   setPinLoginEnabled(enabled: boolean): void {
     if (enabled) {
-      mmkvCache.set(PIN_LOGIN_ENABLED_KEY, true);
+      cache().set(PIN_LOGIN_ENABLED_KEY, true);
     } else {
-      mmkvCache.delete(PIN_LOGIN_ENABLED_KEY);
+      cache().delete(PIN_LOGIN_ENABLED_KEY);
     }
   },
 
   setPinLoginMobile(mobile: string): void {
-    mmkvCache.set(PIN_LOGIN_MOBILE_KEY, mobile);
+    cache().set(PIN_LOGIN_MOBILE_KEY, mobile);
   },
 
   getPinLoginMobile(): string | null {
-    return mmkvCache.getString(PIN_LOGIN_MOBILE_KEY) ?? null;
+    return cache().getString(PIN_LOGIN_MOBILE_KEY) ?? null;
   },
 
   clearPinLoginMobile(): void {
-    mmkvCache.delete(PIN_LOGIN_MOBILE_KEY);
+    cache().delete(PIN_LOGIN_MOBILE_KEY);
   },
 
   setLastLoginMobile(mobile: string): void {
-    mmkvCache.set(LAST_LOGIN_MOBILE_KEY, mobile);
+    cache().set(LAST_LOGIN_MOBILE_KEY, mobile);
   },
 
   getLastLoginMobile(): string | null {
-    return mmkvCache.getString(LAST_LOGIN_MOBILE_KEY) ?? null;
+    return cache().getString(LAST_LOGIN_MOBILE_KEY) ?? null;
+  },
+
+  clearLastLoginMobile(): void {
+    cache().delete(LAST_LOGIN_MOBILE_KEY);
   },
 
   // ── Session User (non-secret display/routing metadata) ───────────────────
   // Persisted alongside the Keychain token so a cold start can restore the
   // session UI immediately; the token in Keychain remains the source of truth.
   setSessionUser(user: unknown): void {
-    mmkvCache.set(SESSION_USER_KEY, JSON.stringify(user));
+    cache().set(SESSION_USER_KEY, JSON.stringify(user));
   },
 
   getSessionUser<T>(): T | null {
-    const raw = mmkvCache.getString(SESSION_USER_KEY);
+    const raw = cache().getString(SESSION_USER_KEY);
     if (!raw) return null;
     try { return JSON.parse(raw) as T; }
     catch { return null; }
   },
 
   clearSessionUser(): void {
-    mmkvCache.delete(SESSION_USER_KEY);
+    cache().delete(SESSION_USER_KEY);
   },
 
   // ── Device ID ────────────────────────────────────────────────────────────
@@ -157,18 +171,27 @@ export const SecureStorage = {
     }
   },
 
+  async clearDeviceId(): Promise<void> {
+    try {
+      await Keychain.resetInternetCredentials(KEYCHAIN_KEYS.deviceId);
+    } catch {
+      // Missing/broken Keychain must not block local sign-out cleanup.
+    }
+  },
+
   /** Marks whether cold start may rehydrate a saved session. */
   setSessionRestorable(canRestore: boolean): void {
-    authMeta.set(CAN_RESTORE_SESSION_KEY, canRestore);
+    authMeta().set(CAN_RESTORE_SESSION_KEY, canRestore);
   },
 
   isSessionRestorable(): boolean {
-    return authMeta.getBoolean(CAN_RESTORE_SESSION_KEY) ?? false;
+    if (!isEncryptedMmkvReady()) return false;
+    return authMeta().getBoolean(CAN_RESTORE_SESSION_KEY) ?? false;
   },
 
   /** True once the user has signed in or out with the restore gate in place. */
   hasSessionRestorePreference(): boolean {
-    return authMeta.contains(CAN_RESTORE_SESSION_KEY);
+    return authMeta().contains(CAN_RESTORE_SESSION_KEY);
   },
 
   /** Drop any saved credentials before a fresh password sign-in — never throws. */
@@ -198,7 +221,7 @@ export const SecureStorage = {
   async clearSession(): Promise<void> {
     await SecureStorage.prepareForSignIn();
     try {
-      mmkvCache.delete(DASHBOARD_CONTEXT_KEY);
+      cache().delete(DASHBOARD_CONTEXT_KEY);
     } catch {
       // ignore
     }
@@ -208,23 +231,16 @@ export const SecureStorage = {
   async clearAll(): Promise<void> {
     const pinLoginEnabled = SecureStorage.isPinLoginEnabled();
     const pinLoginMobile = SecureStorage.getPinLoginMobile();
-    const lastLoginMobile = SecureStorage.getLastLoginMobile();
-    // Thresholds also live in karins-fleet-wallet-alerts; restore any leftover
-    // cache copies so older builds that still read Cache after logout keep working.
-    const walletThresholdCopies: Record<string, string> = {};
+
+    await SecureStorage.clearSession();
+    await SecureStorage.clearDeviceId();
     try {
-      mmkvCache.getAllKeys().forEach((key) => {
-        if (!key.startsWith('wallet_alert_threshold')) return;
-        const value = mmkvCache.getString(key);
-        if (value != null) walletThresholdCopies[key] = value;
-      });
+      cache().clearAll();
     } catch {
       // ignore
     }
-
-    await SecureStorage.clearSession();
     try {
-      mmkvCache.clearAll();
+      getWalletAlertStore().clearAll();
     } catch {
       // ignore
     }
@@ -233,39 +249,34 @@ export const SecureStorage = {
       SecureStorage.setPinLoginEnabled(true);
       SecureStorage.setPinLoginMobile(pinLoginMobile);
     }
-    if (lastLoginMobile) {
-      SecureStorage.setLastLoginMobile(lastLoginMobile);
-    }
-    Object.entries(walletThresholdCopies).forEach(([key, value]) => {
-      mmkvCache.set(key, value);
-    });
   },
 };
 
-// ── MMKV Cache Helpers ────────────────────────────────────────────────────
+// ── Encrypted MMKV Cache Helpers ──────────────────────────────────────────
 export const Cache = {
   setJSON<T>(key: string, value: T): void {
-    mmkvCache.set(key, JSON.stringify(value));
+    cache().set(key, JSON.stringify(value));
   },
 
   getJSON<T>(key: string): T | null {
-    const v = mmkvCache.getString(key);
+    if (!isEncryptedMmkvReady()) return null;
+    const v = cache().getString(key);
     if (!v) return null;
     try { return JSON.parse(v) as T; }
     catch { return null; }
   },
 
   set(key: string, value: string | number | boolean): void {
-    if (typeof value === 'string') mmkvCache.set(key, value);
-    else if (typeof value === 'number') mmkvCache.set(key, value);
-    else mmkvCache.set(key, value);
+    if (typeof value === 'string') cache().set(key, value);
+    else if (typeof value === 'number') cache().set(key, value);
+    else cache().set(key, value);
   },
 
   getString(key: string): string | null {
-    return mmkvCache.getString(key) ?? null;
+    return cache().getString(key) ?? null;
   },
 
   delete(key: string): void {
-    mmkvCache.delete(key);
+    cache().delete(key);
   },
 };

@@ -17,6 +17,8 @@ import {
 } from '../../types/auth';
 import type { DashboardSummary } from '../../types/dashboard';
 import { Cache, SecureStorage } from '../storage/SecureStorage';
+import { initEncryptedMmkv } from '../storage/encryptedMmkv';
+import { sanitizeDashboardSnapshot } from '../../features/dashboard/utils/sanitizeDashboardSnapshot';
 import { syncDashboardNotifications } from './syncDashboardNotifications';
 
 const CACHE_KEY_PREFIX = 'dashboard_snapshot';
@@ -30,6 +32,7 @@ function buildDashboardCacheKey(userId?: number, customerId?: number): string {
  * No-ops when there is no restorable session or the network call fails.
  */
 export async function runBackgroundFleetSync(): Promise<void> {
+  await initEncryptedMmkv();
   const token = await SecureStorage.getAccessToken();
   if (!token || !SecureStorage.isSessionRestorable()) return;
 
@@ -49,7 +52,7 @@ export async function runBackgroundFleetSync(): Promise<void> {
     });
     const normalized = normalizeDashboardSummary(res);
     const cacheKey = buildDashboardCacheKey(user.userId, customerId);
-    Cache.setJSON<DashboardSummary>(cacheKey, normalized);
+    Cache.setJSON<DashboardSummary>(cacheKey, sanitizeDashboardSnapshot(normalized));
 
     // Tray heads-up + inbox merge — same rules as opening the Dashboard screen.
     syncDashboardNotifications(normalized, { userId: user.userId, customerId });

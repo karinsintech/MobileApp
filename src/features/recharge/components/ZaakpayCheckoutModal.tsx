@@ -83,6 +83,8 @@ export default function ZaakpayCheckoutModal({
             domStorageEnabled
             sharedCookiesEnabled
             thirdPartyCookiesEnabled={Platform.OS === 'android'}
+            // Explicit default — HTTPS checkout must not pull cleartext subresources.
+            mixedContentMode="never"
           />
         ) : null}
       </View>

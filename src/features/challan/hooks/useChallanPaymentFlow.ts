@@ -17,7 +17,10 @@ import {
   resolveChallanCheckoutSource,
   type ChallanCheckoutSource,
 } from '../utils/resolveChallanCheckoutSource';
-import type { ChallanPaymentEventType } from '../components/ChallanPaymentCheckoutModal';
+import type {
+  ChallanPaymentEventMeta,
+  ChallanPaymentEventType,
+} from '../components/ChallanPaymentCheckoutModal';
 
 interface PaymentSession {
   requestId: string;
@@ -115,7 +118,10 @@ export function useChallanPaymentFlow({ onRefresh }: UseChallanPaymentFlowOption
     }
   }, [cancelPaymentSession, clearPaymentTimeout, closePaymentModal, scheduleRefresh]);
 
-  const handlePaymentEvent = useCallback(async (type: ChallanPaymentEventType) => {
+  const handlePaymentEvent = useCallback(async (
+    type: ChallanPaymentEventType,
+    meta?: ChallanPaymentEventMeta,
+  ) => {
     const session = paymentSessionRef.current;
     clearPaymentTimeout();
     closePaymentModal();
@@ -132,8 +138,12 @@ export function useChallanPaymentFlow({ onRefresh }: UseChallanPaymentFlowOption
       return;
     }
 
-    if (type === 'PAYMENT_CANCEL' && session) {
-      await cancelPaymentSession(session);
+    if (type === 'PAYMENT_CANCEL') {
+      // URL-detected cancel must not hit the server — forged status=cancel would
+      // abort a legitimate in-flight payment. Gateway postMessage is token-bound.
+      if (meta?.fromPostMessage && session) {
+        await cancelPaymentSession(session);
+      }
       Alert.alert('Payment Cancelled', 'You can retry the payment anytime');
       scheduleRefresh();
     }

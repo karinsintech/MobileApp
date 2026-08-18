@@ -33,11 +33,12 @@ export function openExternalPaymentUrl(url: string): void {
           return;
         }
         const fallback = readIntentFallbackUrl(trimmed);
-        if (fallback) tryOpen(fallback);
+        // Chrome extra is a browser URL only — custom schemes would open other apps as Karins.
+        if (fallback && /^https?:\/\//i.test(fallback)) tryOpen(fallback);
       })
       .catch(() => {
         const fallback = readIntentFallbackUrl(trimmed);
-        if (fallback) tryOpen(fallback);
+        if (fallback && /^https?:\/\//i.test(fallback)) tryOpen(fallback);
       });
     return;
   }

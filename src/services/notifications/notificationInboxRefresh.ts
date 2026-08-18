@@ -8,6 +8,7 @@ import { requiresAdminContextPicker, resolveActiveCustomerId } from '../../types
 import type { DashboardContext } from '../../types/auth';
 import type { DashboardSummary } from '../../types/dashboard';
 import { normalizeDashboardSummary } from '../../features/dashboard/utils/dashboardSummaryUtils';
+import { sanitizeDashboardSnapshot } from '../../features/dashboard/utils/sanitizeDashboardSnapshot';
 import { dashboardApi } from '../api/dashboardApi';
 import { Cache } from '../storage/SecureStorage';
 import type { FleetNotification } from './notificationTypes';
@@ -65,7 +66,7 @@ export async function refreshNotificationInbox(
         ...(canScopeByCustomerId && customerId ? { customerId } : {}),
       });
       const normalized = normalizeDashboardSummary(res);
-      Cache.setJSON(cacheKey, normalized);
+      Cache.setJSON(cacheKey, sanitizeDashboardSnapshot(normalized));
       syncFromSummary(normalized);
     } catch (error) {
       if (__DEV__) {

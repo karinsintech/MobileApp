@@ -27,16 +27,23 @@ import {
   type ChallanCheckoutSource,
 } from '../utils/resolveChallanCheckoutSource';
 import {
+  isAllowedChallanPopupUrl,
   parseChallanPaymentNavigation,
   shouldOpenPaymentExternally,
+  type ChallanPaymentEventType,
 } from '../utils/parseChallanPaymentNavigation';
 import { openExternalPaymentUrl } from '../utils/openExternalPaymentUrl';
 
-export type ChallanPaymentEventType = 'PAYMENT_SUCCESS' | 'PAYMENT_FAILED' | 'PAYMENT_CANCEL';
+export type { ChallanPaymentEventType };
+
+export interface ChallanPaymentEventMeta {
+  /** Token-validated gateway postMessage — safe to sync server cancel. */
+  fromPostMessage?: boolean;
+}
 
 interface ChallanPaymentCheckoutModalProps {
   checkout: ChallanCheckoutSource | null;
-  onEvent: (type: ChallanPaymentEventType) => void;
+  onEvent: (type: ChallanPaymentEventType, meta?: ChallanPaymentEventMeta) => void;
   onClose: () => void;
 }
 
@@ -58,10 +65,10 @@ export default function ChallanPaymentCheckoutModal({
     }
   }, [checkout]);
 
-  const emitEvent = useCallback((type: ChallanPaymentEventType) => {
+  const emitEvent = useCallback((type: ChallanPaymentEventType, meta?: ChallanPaymentEventMeta) => {
     if (handledRef.current) return;
     handledRef.current = true;
-    onEvent(type);
+    onEvent(type, meta);
   }, [onEvent]);
 
   const handleNavigationUrl = useCallback((url: string): boolean => {
@@ -99,7 +106,7 @@ export default function ChallanPaymentCheckoutModal({
         return;
       }
 
-      emitEvent(data.type);
+      emitEvent(data.type, { fromPostMessage: true });
     } catch {
       // Ignore non-JSON messages from the gateway page.
     }
@@ -163,14 +170,17 @@ export default function ChallanPaymentCheckoutModal({
             onMessage={(event: WebViewMessageEvent) => handleMessage(event.nativeEvent.data)}
             onOpenWindow={(event: WebViewOpenWindowEvent): void => {
               const targetUrl = event.nativeEvent.targetUrl;
-              if (targetUrl) setForcedUrl(targetUrl);
+              if (targetUrl && isAllowedChallanPopupUrl(targetUrl)) {
+                setForcedUrl(targetUrl);
+              }
             }}
             javaScriptEnabled
             javaScriptCanOpenWindowsAutomatically
             domStorageEnabled
             sharedCookiesEnabled
             thirdPartyCookiesEnabled={Platform.OS === 'android'}
-            mixedContentMode="always"
+            // Block http:// scripts/images inside this https:// Razorpay document (MASVS-NETWORK-1).
+            mixedContentMode="never"
             setSupportMultipleWindows={Platform.OS === 'android'}
             allowsInlineMediaPlayback
             startInLoadingState

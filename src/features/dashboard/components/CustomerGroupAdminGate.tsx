@@ -105,7 +105,7 @@ export default function CustomerGroupAdminGate() {
 
   const handleCancel = useCallback(() => {
     // Web logs out when the operator dismisses without choosing a customer.
-    dispatch(signOut(undefined));
+    dispatch(signOut());
   }, [dispatch]);
 
   const visibleCustomers = customers.filter((c) => {

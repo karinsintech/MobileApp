@@ -3,50 +3,59 @@
  * `${FRONTEND_URL}/transaction/recharge/?orderId=...&rechargeStatus=...`
  *
  * App WebView intercepts this URL — backend /status handler is unchanged.
+ * Origin is allow-listed so a gateway page cannot complete checkout via a
+ * lookalike /transaction/recharge path on an attacker host (MASVS-PLATFORM-3).
  */
 
+import { IS_DEV } from '../../../config/env';
 import type { RechargeStartedPayload } from '../types/rechargeTypes';
 
-export function isRechargeReturnUrl(url: string): boolean {
-  if (!url || !/[?&]orderId=/i.test(url)) return false;
-  return /\/transaction\/recharge\/?(\?|#|$)/i.test(url);
-}
+const ALLOWED_RETURN_ORIGINS = new Set([
+  'https://fleet.karins.in',
+  'https://testfleet.karins.in',
+  ...(IS_DEV ? ['http://localhost:3000'] : []),
+]);
 
-function extractRechargeQueryParams(url: string): RechargeStartedPayload | null {
+function parseAllowedReturnUrl(url: string): URL | null {
+  if (!url) return null;
+
   try {
     const parsed = new URL(url);
-    const orderId = parsed.searchParams.get('orderId');
-    if (!orderId) return null;
+    if (!ALLOWED_RETURN_ORIGINS.has(parsed.origin)) return null;
 
-    const amount = parsed.searchParams.get('amount');
-    const rechargeStatus = parsed.searchParams.get('rechargeStatus');
-    const message = parsed.searchParams.get('message');
-    const paymentMode = parsed.searchParams.get('paymentMode');
+    // Same path the web /status redirect uses — reject nested lookalike routes.
+    const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+    if (pathname.toLowerCase() !== '/transaction/recharge') return null;
+    if (!parsed.searchParams.get('orderId')) return null;
 
-    return {
-      transactionId: orderId,
-      ...(amount ? { amount } : {}),
-      ...(rechargeStatus ? { rechargeStatus } : {}),
-      ...(message ? { message } : {}),
-      ...(paymentMode ? { paymentMode } : {}),
-    };
+    return parsed;
   } catch {
-    const orderMatch = url.match(/[?&]orderId=([^&]+)/i);
-    if (!orderMatch) return null;
-
-    const pick = (key: string) => url.match(new RegExp(`[?&]${key}=([^&]*)`, 'i'))?.[1];
-
-    return {
-      transactionId: decodeURIComponent(orderMatch[1]),
-      ...(pick('amount') ? { amount: decodeURIComponent(pick('amount')!) } : {}),
-      ...(pick('rechargeStatus') ? { rechargeStatus: decodeURIComponent(pick('rechargeStatus')!) } : {}),
-      ...(pick('message') ? { message: decodeURIComponent(pick('message')!) } : {}),
-      ...(pick('paymentMode') ? { paymentMode: decodeURIComponent(pick('paymentMode')!) } : {}),
-    };
+    // Malformed URLs are not a Karins return — do not regex-parse them.
+    return null;
   }
 }
 
+export function isRechargeReturnUrl(url: string): boolean {
+  return parseAllowedReturnUrl(url) !== null;
+}
+
 export function parseRechargeReturnUrl(url: string): RechargeStartedPayload | null {
-  if (!isRechargeReturnUrl(url)) return null;
-  return extractRechargeQueryParams(url);
+  const parsed = parseAllowedReturnUrl(url);
+  if (!parsed) return null;
+
+  const orderId = parsed.searchParams.get('orderId');
+  if (!orderId) return null;
+
+  const amount = parsed.searchParams.get('amount');
+  const rechargeStatus = parsed.searchParams.get('rechargeStatus');
+  const message = parsed.searchParams.get('message');
+  const paymentMode = parsed.searchParams.get('paymentMode');
+
+  return {
+    transactionId: orderId,
+    ...(amount ? { amount } : {}),
+    ...(rechargeStatus ? { rechargeStatus } : {}),
+    ...(message ? { message } : {}),
+    ...(paymentMode ? { paymentMode } : {}),
+  };
 }

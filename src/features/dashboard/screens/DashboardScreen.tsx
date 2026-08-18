@@ -24,6 +24,7 @@ import type { DashboardSummary } from '../../../types/dashboard';
 import {dashboardBody, dashboardContentFont, dashboardHeader, dashboardSubheading, DASHBOARD_LIGHT_WHITE} from '../dashboardTypography';
 import { requiresAdminContextPicker, requiresContextSelection, resolveActiveCustomerId } from '../../../types/auth';
 import { normalizeDashboardSummary } from '../utils/dashboardSummaryUtils';
+import { sanitizeDashboardSnapshot } from '../utils/sanitizeDashboardSnapshot';
 import CustomerContextDropdown from '../components/CustomerContextDropdown';
 import WalletBalanceCard from '../components/WalletBalanceCard';
 import SavingsRecoveryCard, { type SavingsNavTarget } from '../components/SavingsRecoveryCard';
@@ -90,9 +91,7 @@ export default function DashboardScreen() {
       // Paint cached data instantly on mount so the screen is never blank — but
       // only the snapshot that belongs to THIS user+customer (see cacheKey).
       const cached = Cache.getJSON<DashboardSummary>(cacheKey);
-      // Clear any prior account's data first so a cache miss shows skeletons,
-      // not the previous session's numbers.
-      setData(cached ?? null);
+      setData(cached ? sanitizeDashboardSnapshot(cached) : null);
       if (cached) {
         syncDashboardNotifications(cached, { userId: user?.userId, customerId });
         void syncBroadcastNotificationsFromApi();
@@ -108,7 +107,7 @@ export default function DashboardScreen() {
       });
       const normalized = normalizeDashboardSummary(res);
       setData(normalized);
-      Cache.setJSON(cacheKey, normalized);
+      Cache.setJSON(cacheKey, sanitizeDashboardSnapshot(normalized));
       syncDashboardNotifications(normalized, { userId: user?.userId, customerId });
       void syncBroadcastNotificationsFromApi();
       void import('../../../services/notifications/walletAlertPreferences').then(

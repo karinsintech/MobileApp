@@ -1,6 +1,9 @@
 /**
  * Recharge payment status — mirrors web transaction status modal after Zaakpay
  * redirect or immediate process-recharge response.
+ *
+ * Route params (deep link or WebView) are not trusted for Success/Fail/amount.
+ * Status is always taken from POST /transaction/recharge/check-txn-status.
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
@@ -40,12 +43,10 @@ export default function RechargeStatusScreen({ route, navigation }: any) {
   // Deep link uses orderId (web parity); in-app navigation may pass transactionId.
   const transactionId = params.transactionId ?? params.orderId ?? '';
 
-  const [state, setState] = useState<PaymentState>(() => resolvePaymentState(params.rechargeStatus));
-  const [amount, setAmount] = useState<string | number | undefined>(params.amount);
-  const [paymentMode, setPaymentMode] = useState<string | undefined>(params.paymentMode);
-  const [message, setMessage] = useState(
-    params.message ?? (params.rechargeStatus ? 'Transaction status received.' : 'Processing your recharge…'),
-  );
+  const [state, setState] = useState<PaymentState>('pending');
+  const [amount, setAmount] = useState<string | number | undefined>(undefined);
+  const [paymentMode, setPaymentMode] = useState<string | undefined>(undefined);
+  const [message, setMessage] = useState('Processing your recharge…');
 
   const applyStatus = useCallback((next: {
     rechargeStatus?: string;
@@ -89,31 +90,16 @@ export default function RechargeStatusScreen({ route, navigation }: any) {
   }, [applyStatus, paymentMode, transactionId]);
 
   useEffect(() => {
-    // Zaakpay deep link / web redirect passes status in query params — show immediately.
-    if (params.rechargeStatus) {
-      applyStatus({
-        rechargeStatus: params.rechargeStatus,
-        amount: params.amount,
-        message: params.message,
-        paymentMode: params.paymentMode,
-      });
+    if (!transactionId) {
+      setState('unknown');
+      setMessage('Missing order reference for this payment.');
       return;
     }
-
-    if (!transactionId) return;
 
     checkStatus();
     const timer = setInterval(checkStatus, 5000);
     return () => clearInterval(timer);
-  }, [
-    applyStatus,
-    checkStatus,
-    params.amount,
-    params.message,
-    params.paymentMode,
-    params.rechargeStatus,
-    transactionId,
-  ]);
+  }, [checkStatus, transactionId]);
 
   const pillVariant = state === 'success' ? 'success' : state === 'failed' ? 'danger' : 'warning';
   const statusLabel = state === 'success'

@@ -23,9 +23,9 @@ describe('hasPrivilege / hasAnyPrivilege', () => {
 describe('canAccessByPrivilege', () => {
   const menus: AccessMenuItem[] = [{ id: '201' }];
 
-  it('allows everything until privileges are loaded (offline-safe)', () => {
-    expect(canAccessByPrivilege([], false, PrivilegeIds.CHALLAN_MENU)).toBe(true);
-    expect(canAccessByPrivilege(menus, false, PrivilegeIds.VEHICLE_MENU)).toBe(true);
+  it('fails closed until privileges are loaded', () => {
+    expect(canAccessByPrivilege([], false, PrivilegeIds.CHALLAN_MENU)).toBe(false);
+    expect(canAccessByPrivilege(menus, false, PrivilegeIds.VEHICLE_MENU)).toBe(false);
   });
 
   it('requires the privilege after menus load', () => {

@@ -267,7 +267,7 @@ export function getApiErrorMessage(error: unknown, fallback = 'Something went wr
     const message = (error as ApiError).message;
     if (typeof message === 'string' && message.trim()) {
       // Nginx/HTML bodies are not useful in the UI — map common cases.
-      if (/<!DOCTYPE html|/i.test(message) || /<pre>Bad Request<\/pre>/i.test(message)) {
+      if (/<!DOCTYPE html/i.test(message) || /<pre>Bad Request<\/pre>/i.test(message)) {
         return 'Invalid mobile number or password.';
       }
       return message.trim();

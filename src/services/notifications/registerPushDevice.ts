@@ -9,7 +9,8 @@
 import { Platform } from 'react-native';
 import DeviceInfo from 'react-native-device-info';
 import { authApi } from '../api/authApi';
-import { Cache, SecureStorage } from '../storage/SecureStorage';
+import { ensureDeviceIdPersisted } from '../auth/deviceIdentity';
+import { Cache } from '../storage/SecureStorage';
 import { isFirebaseMessagingAvailable, getMessagingInstance } from './messagingProvider';
 import { pushService } from './pushService';
 
@@ -96,8 +97,7 @@ async function registerPushDeviceInner(force: boolean): Promise<boolean> {
       return true;
     }
 
-    const deviceId = await DeviceInfo.getUniqueId();
-    await SecureStorage.setDeviceId(deviceId);
+    const deviceId = await ensureDeviceIdPersisted();
 
     await authApi.registerDevice({
       deviceId,

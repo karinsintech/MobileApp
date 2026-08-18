@@ -15,6 +15,7 @@ import {
   requiresAdminContextPicker,
 } from '../../types/auth';
 import { switchActiveCustomer } from '../../services/auth/customerSwitch';
+import { ensureDeviceIdPersisted, resolveLogoutDeviceId } from '../../services/auth/deviceIdentity';
 import { signInWithPinLogin, syncPinLoginPreference, enablePinLogin } from '../../services/auth/pinAuthService';
 
 /** Same wording as a bad-credentials failure so restricted roles are not tipped off. */
@@ -81,6 +82,11 @@ async function persistSession(
     SecureStorage.setLastLoginMobile(mobileNumber);
   }
   markApiSessionActive();
+  try {
+    await ensureDeviceIdPersisted();
+  } catch {
+    // Best-effort — logout still resolves hardware id at sign-out time.
+  }
 }
 
 export const signIn = createAsyncThunk<
@@ -256,22 +262,25 @@ export const syncDefaultCustomerSession = createAsyncThunk<
   },
 );
 
-export const signOut = createAsyncThunk<void, string | undefined>(
+export const signOut = createAsyncThunk<void, void>(
   'auth/signOut',
-  async (deviceId) => {
-    const id = deviceId && deviceId !== 'unknown' ? deviceId : undefined;
+  async () => {
+    const deviceId = await resolveLogoutDeviceId();
 
-    invalidateApiSession();
-
+    // Bearer is still in Keychain until clearAll — server invalidates the session.
     try {
-      if (id) {
-        await authApi.logout(id);
-        await authApi.revokeDevice(id);
-      }
+      await authApi.logout(deviceId);
     } catch {
-      /* server logout/revoke is best-effort */
+      /* server logout is best-effort — local sign-out must still complete */
     }
 
+    try {
+      await authApi.revokeDevice(deviceId);
+    } catch {
+      /* push may never have been registered for this handset */
+    }
+
+    invalidateApiSession();
     await SecureStorage.clearAll();
   },
 );

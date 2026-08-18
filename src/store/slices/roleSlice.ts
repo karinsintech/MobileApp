@@ -63,7 +63,8 @@ const roleSlice = createSlice({
       })
       .addCase(fetchAccessMenus.rejected, (state, action) => {
         state.isLoading = false;
-        // Keep privilegesLoaded false so gates fall back to role-only access.
+        // Keep privilegesLoaded false so mapped features fail closed until a
+        // successful privilege fetch proves access.
         state.error = action.payload ?? 'Unable to load role access.';
       })
       // Wipe privileges whenever auth identity changes or ends.

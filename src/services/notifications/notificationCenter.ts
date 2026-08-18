@@ -13,6 +13,10 @@ import { Cache } from '../storage/SecureStorage';
 import { notificationApi, type NotificationListRow } from '../api/notificationApi';
 import type { FleetNotification } from './notificationTypes';
 import { notificationEvents } from './notificationEvents';
+import {
+  parsePlausibleNotificationTimestamp,
+  sanitizeRemoteNotificationData,
+} from './sanitizeRemoteNotificationData';
 
 export const NOTIFICATIONS_CACHE_KEY = 'notifications_center';
 const NOTIFICATIONS_IMAGE_FIX_KEY = 'notifications_center_image_fix';
@@ -408,21 +412,52 @@ export function getTimedBroadcastNotices(now = Date.now()): FleetNotification[] 
   });
 }
 
+/** Persist a Notifee tray alert into the inbox with remote payload bounds applied. */
+export function fleetNotificationFromTrayPayload(input: {
+  id: string;
+  title?: string | null;
+  body?: string | null;
+  data?: Record<string, unknown> | null;
+}): FleetNotification {
+  const data = sanitizeRemoteNotificationData(input.data);
+  const image =
+    resolveNotificationImageUrl(
+      data.image ?? data.imageUrl ?? data.picture ?? '',
+    ) ?? undefined;
+  const scheduledAt = data.scheduledAt ?? null;
+  const expiresAt = data.expiresAt ?? null;
+
+  return {
+    id: input.id,
+    category: String(data.category ?? data.type ?? 'product_update'),
+    title: input.title ?? data.title ?? 'Karins Fleet',
+    body: input.body ?? data.body ?? '',
+    image,
+    createdAt: parsePlausibleNotificationTimestamp(
+      data.createdAt ?? scheduledAt,
+    ),
+    scheduledAt,
+    expiresAt,
+    read: false,
+    data,
+  };
+}
+
 /** Maps FCM payloads into inbox rows (admin broadcast or category alert). */
 export function mapRemoteMessageToNotification(
   message: FirebaseMessagingTypes.RemoteMessage,
 ): FleetNotification {
-  const data = message.data ?? {};
+  const data = sanitizeRemoteNotificationData(message.data);
   const id = String(data.notificationId ?? data.id ?? message.messageId ?? Date.now());
 
   const isBroadcast =
-    String(data.category) === 'broadcast' ||
-    String(data.action) === 'admin_broadcast' ||
-    String(data.type) === '1' ||
-    String(data.page) === '1';
+    data.category === 'broadcast' ||
+    data.action === 'admin_broadcast' ||
+    data.type === '1' ||
+    data.page === '1';
 
   const title =
-    message.notification?.title ?? String(data.title ?? 'Karins Fleet');
+    message.notification?.title ?? data.title ?? 'Karins Fleet';
 
   const fullText = String(
     data.description ?? data.message ?? message.notification?.body ?? data.body ?? '',
@@ -437,8 +472,8 @@ export function mapRemoteMessageToNotification(
   ).trim();
   const image = rawImage ? resolveNotificationImageUrl(rawImage) ?? undefined : undefined;
 
-  const scheduledAt = data.scheduledAt ? String(data.scheduledAt) : null;
-  const expiresAt = data.expiresAt ? String(data.expiresAt) : null;
+  const scheduledAt = data.scheduledAt ?? null;
+  const expiresAt = data.expiresAt ?? null;
 
   return {
     id,
@@ -449,12 +484,12 @@ export function mapRemoteMessageToNotification(
     body: shortBody || title,
     detail: fullText || shortBody || undefined,
     image,
-    createdAt: String(data.createdAt ?? scheduledAt ?? new Date().toISOString()),
+    createdAt: parsePlausibleNotificationTimestamp(
+      data.createdAt ?? scheduledAt,
+    ),
     scheduledAt,
     expiresAt,
     read: false,
-    data: Object.fromEntries(
-      Object.entries(data).map(([key, value]) => [key, String(value)]),
-    ),
+    data,
   };
 }

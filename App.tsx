@@ -45,6 +45,8 @@ export default function App() {
   // while the post-login splash still blocks the authenticated push hook.
   useEffect(() => {
     (async () => {
+      const { initEncryptedMmkv } = await import('./src/services/storage/encryptedMmkv');
+      await initEncryptedMmkv();
       const { pushService } = await import('./src/services/notifications/pushService');
       await pushService.ensureAndroidChannel();
       await store.dispatch(restoreSession());

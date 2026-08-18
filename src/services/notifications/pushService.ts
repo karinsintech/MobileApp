@@ -19,10 +19,12 @@ import notifee, {
 } from '@notifee/react-native';
 import { check, request, PERMISSIONS, RESULTS } from 'react-native-permissions';
 import {
+  fleetNotificationFromTrayPayload,
   mapRemoteMessageToNotification,
   resolveNotificationImageUrl,
   upsertNotification,
 } from './notificationCenter';
+import { sanitizeRemoteNotificationData } from './sanitizeRemoteNotificationData';
 import { navigateToNotificationsScreen } from './notificationNavigation';
 import type { FleetNotification } from './notificationTypes';
 import {
@@ -79,17 +81,11 @@ function formatTrayBody(notification: Pick<FleetNotification, 'body' | 'detail'>
   return fullText.replace(/\s*\n+\s*/g, ', ');
 }
 
-/** Notifee requires string/number data values — booleans/nulls throw and some OEMs abort. */
+/** Notifee requires string data — remote keys are allow-listed before attach. */
 function toNotifeeData(
   data?: Record<string, unknown> | null,
 ): Record<string, string> {
-  if (!data) return {};
-  const out: Record<string, string> = {};
-  Object.entries(data).forEach(([key, value]) => {
-    if (value === undefined || value === null) return;
-    out[key] = typeof value === 'string' ? value : String(value);
-  });
-  return out;
+  return sanitizeRemoteNotificationData(data);
 }
 
 /** Only remote http(s) art is safe for BigPicture — resource names / relative paths crash natively. */
@@ -198,22 +194,14 @@ export async function syncInboxFromSystemTray(): Promise<void> {
       if (!notification?.id) return;
 
       const data = notification.data ?? {};
-      const image =
-        resolveNotificationImageUrl(
-          String(data.image ?? data.imageUrl ?? data.picture ?? ''),
-        ) ?? undefined;
-      upsertNotification({
-        id: String(notification.id),
-        category: String(data.category ?? data.type ?? 'product_update'),
-        title: notification.title ?? 'Karins Fleet',
-        body: notification.body ?? '',
-        image,
-        createdAt: String(data.createdAt ?? new Date().toISOString()),
-        read: false,
-        data: Object.fromEntries(
-          Object.entries(data).map(([key, value]) => [key, String(value)]),
-        ),
-      });
+      upsertNotification(
+        fleetNotificationFromTrayPayload({
+          id: String(notification.id),
+          title: notification.title,
+          body: notification.body,
+          data,
+        }),
+      );
     });
   } catch {
     /* tray sync is best-effort */
@@ -366,44 +354,26 @@ export const pushService = {
     try {
       notifee.onForegroundEvent(({ type, detail }) => {
         if (type === EventType.DELIVERED && detail.notification) {
-          const data = detail.notification.data ?? {};
-          const image =
-            resolveNotificationImageUrl(
-              String(data.image ?? data.imageUrl ?? data.picture ?? ''),
-            ) ?? undefined;
-          upsertNotification({
-            id: String(detail.notification.id ?? Date.now()),
-            category: String(data.category ?? data.type ?? 'product_update'),
-            title: detail.notification.title ?? 'Karins Fleet',
-            body: detail.notification.body ?? '',
-            image,
-            createdAt: String(data.createdAt ?? new Date().toISOString()),
-            read: false,
-            data: Object.fromEntries(
-              Object.entries(data).map(([k, v]) => [k, String(v)]),
-            ),
-          });
+          upsertNotification(
+            fleetNotificationFromTrayPayload({
+              id: String(detail.notification.id ?? Date.now()),
+              title: detail.notification.title,
+              body: detail.notification.body,
+              data: detail.notification.data,
+            }),
+          );
           return;
         }
 
         if (type === EventType.PRESS && detail.notification) {
-          const data = detail.notification.data ?? {};
-          const image =
-            resolveNotificationImageUrl(
-              String(data.image ?? data.imageUrl ?? data.picture ?? ''),
-            ) ?? undefined;
-          upsertNotification({
-            id: String(detail.notification.id ?? Date.now()),
-            category: String(data.category ?? data.type ?? 'product_update'),
-            title: detail.notification.title ?? 'Karins Fleet',
-            body: detail.notification.body ?? '',
-            image,
-            createdAt: String(data.createdAt ?? new Date().toISOString()),
-            read: false,
-            data: Object.fromEntries(
-              Object.entries(data).map(([k, v]) => [k, String(v)]),
-            ),
-          });
+          upsertNotification(
+            fleetNotificationFromTrayPayload({
+              id: String(detail.notification.id ?? Date.now()),
+              title: detail.notification.title,
+              body: detail.notification.body,
+              data: detail.notification.data,
+            }),
+          );
           // Tray tap → Notifications menu (bell inbox).
           navigateToNotificationsScreen();
         }

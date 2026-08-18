@@ -18,7 +18,7 @@ export const authApi = {
   refresh: () =>
     apiClient.post<RefreshResponse>('/auth/mobile/refresh', {}),
 
-  /** Logout — clears server-side session + revokes device FCM token */
+  /** Logout — Bearer invalidates session; deviceId revokes push registration when present. */
   logout: (deviceId: string) =>
     apiClient.post('/auth/mobile/logout', { deviceId }),
 

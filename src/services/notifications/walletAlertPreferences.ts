@@ -4,11 +4,9 @@
  * survives logout so the slider can paint before the next API round-trip.
  */
 
-import { MMKV } from 'react-native-mmkv';
 import { dashboardApi } from '../api/dashboardApi';
 import { snapWalletThreshold } from '../../constants/walletThresholdConstants';
-
-const walletAlertStore = new MMKV({ id: 'karins-fleet-wallet-alerts' });
+import { getWalletAlertStore, isEncryptedMmkvReady } from '../storage/encryptedMmkv';
 
 function normalizeScopeId(id?: number | string | null): string {
   if (id == null || id === '') return '';
@@ -39,7 +37,8 @@ function parseStored(raw: string | undefined): number | null {
 }
 
 function readRaw(key: string): number | null {
-  const stored = parseStored(walletAlertStore.getString(key));
+  if (!isEncryptedMmkvReady()) return null;
+  const stored = parseStored(getWalletAlertStore().getString(key));
   if (stored == null || !Number.isFinite(stored)) return null;
   return stored;
 }
@@ -56,7 +55,7 @@ function writeKeys(
     latestKey(userId),
   ];
   [...new Set(keys)].forEach((key) => {
-    walletAlertStore.set(key, payload);
+    getWalletAlertStore().set(key, payload);
   });
 }
 

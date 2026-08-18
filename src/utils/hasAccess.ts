@@ -25,7 +25,7 @@ export function hasAnyPrivilege(
 
 /**
  * Role-management gate for a feature.
- * - Until menus load (or fetch failed): allow — keep the app usable offline.
+ * - While menus are unresolved or failed: deny mapped features (fail closed).
  * - After a successful load: require the mapped privilege(s).
  */
 export function canAccessByPrivilege(
@@ -35,6 +35,6 @@ export function canAccessByPrivilege(
 ): boolean {
   // No privilege mapping → role template alone decides visibility.
   if (privilegeIds == null) return true;
-  if (!privilegesLoaded) return true;
+  if (!privilegesLoaded) return false;
   return hasAnyPrivilege(accessMenus, privilegeIds);
 }

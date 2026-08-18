@@ -1,6 +1,6 @@
 /**
  * Hook — whether the signed-in user has a Role Management privilege ID.
- * Mirrors web useHasAccess; until menus load, returns true (role-only fallback).
+ * Mirrors web useHasAccess; unresolved or failed fetches deny mapped features.
  */
 
 import { useAppSelector } from '../store';

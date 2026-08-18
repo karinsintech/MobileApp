@@ -34,12 +34,6 @@ export const API_BASE_URL: string =
 /** Network request timeout (ms). */
 export const API_TIMEOUT_MS = 20000;
 
-/** Block the app on rooted/jailbroken devices (vs. warn). Controlled by env. */
-export const BLOCK_ON_ROOT: boolean =
-  typeof process !== "undefined" &&
-  !!process.env &&
-  process.env.KARINS_BLOCK_ON_ROOT === "true";
-
 // Production (live cron / FCM): https://api.karins.in/api
 // Test API only: https://testapi.karins.in/api
 // Emulator local Node: http://10.0.2.2:8080/api

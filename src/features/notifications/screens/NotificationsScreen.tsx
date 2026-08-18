@@ -79,17 +79,21 @@ function parseComplianceBody(body: string): ComplianceBodyRow[] {
     });
 }
 
+/**
+ * Inbox action buttons — category only.
+ * NEVER honour remote `data.screen`; dashboard rows already set matching category.
+ */
 function resolveNotificationAction(item: FleetNotification): NotificationAction | null {
   if (item.category === 'broadcast' || item.data?.type === '1' || item.data?.page === '1') {
     // Broadcast detail is already on the card — no deep-link action needed
     return null;
   }
 
-  if (item.category === 'rc_expiry' || item.data?.screen === 'RCList') {
+  if (item.category === 'rc_expiry') {
     return { label: 'View RC', kind: 'more', screen: 'RCList' };
   }
 
-  if (item.category === 'echallan' || item.data?.screen === 'ChallanList') {
+  if (item.category === 'echallan') {
     // Pending challans are the reason this alert exists — open that filter directly.
     return {
       label: 'View Challan',
@@ -99,11 +103,11 @@ function resolveNotificationAction(item: FleetNotification): NotificationAction 
     };
   }
 
-  if (item.category === 'dl_expiry' || item.data?.screen === 'DLList') {
+  if (item.category === 'dl_expiry') {
     return { label: 'View DL', kind: 'more', screen: 'DLList' };
   }
 
-  if (item.category === 'claim_update' || item.data?.screen === 'ClaimsList') {
+  if (item.category === 'claim_update') {
     // Dashboard claim alert is built from approved FY claims — land on that chip.
     return {
       label: 'View Claims',
