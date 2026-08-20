@@ -138,18 +138,7 @@ async function refreshAccessTokenWithBearer(): Promise<string | null> {
   }
 }
 
-async function refreshAccessTokenWithCookie(): Promise<string | null> {
-  try {
-    const res = await axios.post<{ accessToken: string }>(
-      `${BASE_URL}/auth/mobile/refresh`,
-      {},
-      { withCredentials: true, timeout: TIMEOUT_MS },
-    );
-    return res.data.accessToken ?? null;
-  } catch {
-    return null;
-  }
-}
+
 
 async function persistRefreshedAccessToken(newToken: string): Promise<void> {
   if (SecureStorage.isSessionRestorable()) {
@@ -223,9 +212,6 @@ apiClient.interceptors.response.use(
 
       try {
         let newToken = await refreshAccessTokenWithBearer();
-        if (!newToken) {
-          newToken = await refreshAccessTokenWithCookie();
-        }
         if (!newToken) {
           throw new Error('Session refresh failed');
         }

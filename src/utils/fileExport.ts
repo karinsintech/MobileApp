@@ -8,20 +8,37 @@
 
 /* eslint-disable no-bitwise */
 
-import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
+import { Platform } from 'react-native';
 import RNFS from 'react-native-fs';
 
 const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
-type FileDownloadNative = {
-  saveToDownloads: (
-    base64: string,
-    filename: string,
-    mimeType: string,
-  ) => Promise<string>;
-};
+const EXPORT_DIR = `${RNFS.DocumentDirectoryPath}/exports`;
+const EXPORT_RETENTION_DAYS = 7;
 
-const FileDownload = NativeModules.FileDownload as FileDownloadNative | undefined;
+async function ensureExportDirectory(): Promise<void> {
+  if (!(await RNFS.exists(EXPORT_DIR))) {
+    await RNFS.mkdir(EXPORT_DIR);
+  }
+}
+
+export async function purgeOldExports(): Promise<void> {
+  if (!(await RNFS.exists(EXPORT_DIR))) {
+    return;
+  }
+
+  const cutoff =
+    Date.now() - EXPORT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+  const files = await RNFS.readDir(EXPORT_DIR);
+
+  await Promise.all(
+    files
+      .filter(file => file.isFile() && file.mtime)
+      .filter(file => new Date(file.mtime!).getTime() < cutoff)
+      .map(file => RNFS.unlink(file.path).catch(() => undefined)),
+  );
+}
 
 /** Encode bytes without String.fromCharCode spread (avoids stack overflows on large exports). */
 function bytesToBase64(bytes: Uint8Array): string {
@@ -150,24 +167,7 @@ async function writeFileOverwrite(path: string, base64: string): Promise<void> {
   await RNFS.writeFile(path, base64, 'base64');
 }
 
-/** Pre-Android 10 still needs WRITE_EXTERNAL_STORAGE for public Downloads. */
-async function ensureLegacyWritePermission(): Promise<void> {
-  if (Platform.OS !== 'android' || Platform.Version >= 29) return;
 
-  const permission = PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE;
-  const hasPermission = await PermissionsAndroid.check(permission);
-  if (hasPermission) return;
-
-  const result = await PermissionsAndroid.request(permission, {
-    title: 'Storage permission',
-    message: 'Allow KarinsFleet to save Excel/PDF files to Downloads.',
-    buttonPositive: 'Allow',
-    buttonNegative: 'Deny',
-  });
-  if (result !== PermissionsAndroid.RESULTS.GRANTED) {
-    throw new Error('Storage permission is required to save the file.');
-  }
-}
 
 /**
  * Writes export bytes straight to Downloads (Android) or Documents (iOS).
@@ -181,32 +181,13 @@ export async function downloadBinaryFile(
   const base64 = toBase64(data);
   const safeName = uniqueExportFilename(filename);
 
-  if (Platform.OS === 'android') {
-    await ensureLegacyWritePermission();
+  await ensureExportDirectory();
 
-    // Native MediaStore path — real Downloads entry, no share sheet.
-    if (FileDownload?.saveToDownloads) {
-      return FileDownload.saveToDownloads(base64, safeName, mimeType);
-    }
+  const path = `${EXPORT_DIR}/${safeName}`;
 
-    // Fallback if the native module is missing from an old build.
-    if (!RNFS.DownloadDirectoryPath) {
-      throw new Error('Downloads folder is unavailable on this device.');
-    }
-    const downloadPath = `${RNFS.DownloadDirectoryPath}/${safeName}`;
-    await writeFileOverwrite(downloadPath, base64);
-    try {
-      await RNFS.scanFile(downloadPath);
-    } catch {
-      // File may still appear after a short delay.
-    }
-    return `Downloads/${safeName}`;
-  }
-
-  // iOS: app Documents is the user-visible Files location for this app.
-  const path = `${RNFS.DocumentDirectoryPath}/${safeName}`;
   await writeFileOverwrite(path, base64);
-  return `Files/${safeName}`;
+
+  return path;
 }
 
 /** Guess image MIME from the URL / filename so MediaStore indexes Downloads correctly. */
@@ -227,9 +208,14 @@ export async function downloadRemoteUrlToDownloads(
   url: string,
   filename: string,
 ): Promise<string> {
-  const safeName = filename.replace(/[^\w.-]/g, '_') || `notification_${Date.now()}.jpg`;
+  const safeName =
+    filename.replace(/[^\w\.-]/g, '_') ||
+    `notification_${Date.now()}.jpg`;
+
   const mimeType = guessImageMimeType(filename || url);
-  const tempPath = `${RNFS.CachesDirectoryPath}/${Date.now()}_${safeName}`;
+
+  const tempPath =
+    `${RNFS.CachesDirectoryPath}/${Date.now()}_${safeName}`;
 
   const result = await RNFS.downloadFile({
     fromUrl: url,
@@ -242,36 +228,24 @@ export async function downloadRemoteUrlToDownloads(
     } catch {
       // Temp cleanup is best-effort
     }
+
     throw new Error(`Download failed (${result.statusCode})`);
   }
 
   try {
     const base64 = await RNFS.readFile(tempPath, 'base64');
+
     if (!base64) {
       throw new Error('Downloaded image was empty.');
     }
 
-    if (Platform.OS === 'android') {
-      await ensureLegacyWritePermission();
-      if (FileDownload?.saveToDownloads) {
-        return FileDownload.saveToDownloads(base64, safeName, mimeType);
-      }
-      if (!RNFS.DownloadDirectoryPath) {
-        throw new Error('Downloads folder is unavailable on this device.');
-      }
-      const downloadPath = `${RNFS.DownloadDirectoryPath}/${safeName}`;
-      await writeFileOverwrite(downloadPath, base64);
-      try {
-        await RNFS.scanFile(downloadPath);
-      } catch {
-        // File may still appear after a short delay.
-      }
-      return `Downloads/${safeName}`;
-    }
+    await ensureExportDirectory();
 
-    const path = `${RNFS.DocumentDirectoryPath}/${safeName}`;
+    const path = `${EXPORT_DIR}/${safeName}`;
+
     await writeFileOverwrite(path, base64);
-    return `Files/${safeName}`;
+
+    return path;
   } finally {
     try {
       if (await RNFS.exists(tempPath)) {

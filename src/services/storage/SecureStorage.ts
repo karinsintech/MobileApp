@@ -1,12 +1,11 @@
 /**
  * Secure session storage — Keychain for the JWT, encrypted MMKV for metadata.
- * Production never writes the bearer token to MMKV. Dev-only iOS fallback exists
- * for Appetize / Simulator Keychain failures.
+ *
+ * The bearer token is stored exclusively in Keychain.
+ * MMKV is never used as an authentication-token fallback.
  */
 
 import * as Keychain from 'react-native-keychain';
-import { Platform } from 'react-native';
-import { IS_DEV } from '../../config/env';
 import { clearHttpCookies } from '../auth/httpCookies';
 import {
   getAuthMetaStore,
@@ -60,29 +59,29 @@ export const SecureStorage = {
           accessible: TOKEN_ACCESSIBLE,
         },
       );
-      cache().delete(MMKV_ACCESS_TOKEN_KEY);
       return;
     } catch {
-      // Simulator / Appetize only — never persist a production JWT in MMKV.
-      if (IS_DEV && Platform.OS === 'ios') {
-        cache().set(MMKV_ACCESS_TOKEN_KEY, token);
-        return;
-      }
       throw new Error('Could not save access token on this device.');
     }
   },
 
   async getAccessToken(): Promise<string | null> {
     try {
-      const creds = await Keychain.getGenericPassword({ service: KEYCHAIN_SERVICE });
-      if (creds && creds.username === KEYCHAIN_KEYS.accessToken) return creds.password;
+      const creds = await Keychain.getGenericPassword({
+        service: KEYCHAIN_SERVICE,
+      });
+  
+      if (
+        creds &&
+        creds.username === KEYCHAIN_KEYS.accessToken
+      ) {
+        return creds.password;
+      }
+  
+      return null;
     } catch {
-      // Fall through to the gated MMKV fallback below.
+      return null;
     }
-    if (IS_DEV) {
-      return cache().getString(MMKV_ACCESS_TOKEN_KEY) ?? null;
-    }
-    return null;
   },
 
   async removeAccessToken(): Promise<void> {
@@ -91,7 +90,7 @@ export const SecureStorage = {
     } catch {
       // Ignore — missing/broken Keychain must not block sign-in cleanup.
     }
-    cache().delete(MMKV_ACCESS_TOKEN_KEY);
+    
   },
 
   // ── Quick PIN login preference (device-level) ────────────────────────────

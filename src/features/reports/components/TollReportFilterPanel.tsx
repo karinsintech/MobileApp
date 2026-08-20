@@ -4,7 +4,7 @@
 
 import React, { useMemo, useState } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, Platform, Alert,
+  View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, ScrollView, Platform, Alert,
 } from 'react-native';
 import dayjs from 'dayjs';
 import { Colors, FontSize, Spacing, Radius } from '../../../theme';
@@ -109,6 +109,23 @@ export default function TollReportFilterPanel({
       return true;
     });
   }, [customers]);
+
+  const uniqueVehicles = useMemo(() => {
+    const seen = new Set<string>();
+    return vehicles.filter((vehicle) => {
+      if (!vehicle.vehicleNo || seen.has(vehicle.vehicleNo)) return false;
+      seen.add(vehicle.vehicleNo);
+      return true;
+    });
+  }, [vehicles]);
+
+  const [vehicleSearch, setVehicleSearch] = useState('');
+
+  const filteredVehicles = useMemo(() => {
+    const q = vehicleSearch.trim().toLowerCase();
+    if (!q) return uniqueVehicles;
+    return uniqueVehicles.filter((v) => (v.vehicleNo ?? '').toLowerCase().includes(q));
+  }, [uniqueVehicles, vehicleSearch]);
 
   const customerLabel = uniqueCustomers.find((c) => c.firstName === draft.customerName)
     ? `${uniqueCustomers.find((c) => c.firstName === draft.customerName)?.yapEntityId} - ${draft.customerName}`
@@ -273,14 +290,24 @@ export default function TollReportFilterPanel({
 
       {mode === 'vehicle' ? (
         <PickerModal visible={vehicleOpen} title="Vehicle No" onClose={() => setVehicleOpen(false)}>
-          <TouchableOpacity style={styles.modalItem} onPress={() => { onChange({ ...draft, vehicleNo: '' }); setVehicleOpen(false); }}>
+          <TextInput
+            style={[styles.input, { marginBottom: 12 }]}
+            placeholder="Search vehicle"
+            placeholderTextColor={Colors.text.subtle}
+            value={vehicleSearch}
+            onChangeText={setVehicleSearch}
+            autoCapitalize="characters"
+            returnKeyType="done"
+          />
+
+          <TouchableOpacity style={styles.modalItem} onPress={() => { onChange({ ...draft, vehicleNo: '' }); setVehicleOpen(false); setVehicleSearch(''); }}>
             <Text style={styles.modalItemText}>All vehicles</Text>
           </TouchableOpacity>
-          {vehicles.map((vehicle) => (
+          {filteredVehicles.map((vehicle) => (
             <TouchableOpacity
               key={vehicle.vehicleNo}
               style={styles.modalItem}
-              onPress={() => { onChange({ ...draft, vehicleNo: vehicle.vehicleNo }); setVehicleOpen(false); }}
+              onPress={() => { onChange({ ...draft, vehicleNo: vehicle.vehicleNo }); setVehicleOpen(false); setVehicleSearch(''); }}
             >
               <Text style={[styles.modalItemText, draft.vehicleNo === vehicle.vehicleNo && styles.modalItemActive]}>
                 {vehicle.vehicleNo}

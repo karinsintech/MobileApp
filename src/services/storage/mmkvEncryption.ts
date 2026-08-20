@@ -42,7 +42,7 @@ export function resolveMmkvEncryptionKey(): Promise<string> {
   if (persistPromise) return persistPromise;
 
   persistPromise = (async () => {
-    const accessible = Keychain.ACCESSIBLE.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY;
+    const accessible = Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY;
 
     try {
       const existing = await Keychain.getGenericPassword({

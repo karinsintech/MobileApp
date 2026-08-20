@@ -5,7 +5,6 @@
  * Security:
  * - Tokens stored in Keychain only
  * - Passwords NEVER stored
- * - Fingerprint login uses server-backed enrollment
  */
 
 import React, { useEffect, useState } from 'react';
@@ -22,6 +21,7 @@ import {
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { LaunchSplashScreen } from './src/features/splash/LaunchSplashScreen';
 import { OfflineBanner } from './src/components/common/OfflineBanner';
+import { purgeOldExports } from './src/utils/fileExport';
 
 // Suppress known harmless warnings in dev
 LogBox.ignoreLogs([
@@ -37,12 +37,18 @@ function AppWithProviders() {
   );
 }
 
+
 export default function App() {
   const [showLaunchSplash, setShowLaunchSplash] = useState(true);
 
   // Restore session + dashboard context on cold start.
   // Create the Android FCM channel immediately so tray pushes are not dropped
   // while the post-login splash still blocks the authenticated push hook.
+  useEffect(() => {
+    purgeOldExports().catch(() => {
+      // Cleanup failure should not block app startup
+    });
+  }, []);
   useEffect(() => {
     (async () => {
       const { initEncryptedMmkv } = await import('./src/services/storage/encryptedMmkv');

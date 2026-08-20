@@ -158,7 +158,7 @@ export default function ChallanPaymentCheckoutModal({
             key={webViewKey}
             source={webSource}
             style={styles.webview}
-            originWhitelist={['*']}
+            originWhitelist={['https://*']}
             onLoadStart={(event) => {
               handleNavigationUrl(event.nativeEvent.url);
             }}

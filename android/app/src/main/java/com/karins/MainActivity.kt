@@ -7,6 +7,7 @@ import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
 import com.facebook.react.defaults.DefaultReactActivityDelegate
+import android.view.WindowManager
 
 class MainActivity : ReactActivity() {
 
@@ -28,6 +29,12 @@ class MainActivity : ReactActivity() {
    */
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(null)
+     // Prevent screenshots, screen recording, and Android Recents
+  // thumbnails from exposing sensitive application content.
+  window.setFlags(
+    WindowManager.LayoutParams.FLAG_SECURE,
+    WindowManager.LayoutParams.FLAG_SECURE
+  )
     // Match Theme.EdgeToEdge: content draws behind system bars on API 24–34 as well.
     WindowCompat.setDecorFitsSystemWindows(window, false)
     WindowInsetsControllerCompat(window, window.decorView).apply {

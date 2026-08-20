@@ -73,7 +73,7 @@ export default function ZaakpayCheckoutModal({
           <WebView
             source={{ uri: checkoutUrl }}
             style={styles.webview}
-            originWhitelist={['https://*', 'http://*']}
+            originWhitelist={['https://*']}
             onLoadStart={(event) => handleReturnUrl(event.nativeEvent.url)}
             onLoadEnd={() => setIsPageLoading(false)}
             onNavigationStateChange={onNavigationStateChange}

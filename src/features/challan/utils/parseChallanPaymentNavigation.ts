@@ -106,27 +106,38 @@ function readStatusFromPathname(pathname: string): ChallanPaymentEventType | nul
   return null;
 }
 
-export function parseChallanPaymentNavigation(url: string): ChallanPaymentEventType | null {
+export function parseChallanPaymentNavigation(
+  url: string,
+): ChallanPaymentEventType | null {
   if (!url?.trim()) return null;
 
   let parsed: URL;
-  try {
+
+  try {                                                  
     parsed = new URL(url);
-  } catch {
+  } catch {                                                                                       
     return null;
   }
 
-  // Only http(s) navigations — hash-only and custom schemes are ignored here.
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
-
-  const fromQuery = readStatusFromSearchParams(parsed.searchParams);
-  if (fromQuery) return fromQuery;
-
-  if (TRUSTED_PAYMENT_ORIGINS.has(parsed.origin)) {
-    return readStatusFromPathname(parsed.pathname);
+  // Only HTTPS payment URLs are trusted.
+  if (parsed.protocol !== 'https:') {
+    return null;
   }
 
-  return null;
+  // Never trust payment status from an untrusted origin.
+  if (!TRUSTED_PAYMENT_ORIGINS.has(parsed.origin)) {
+    return null;
+  }
+
+  // Read status only from an actual named query parameter.
+  const fromQuery = readStatusFromSearchParams(parsed.searchParams);
+
+  if (fromQuery) {
+    return fromQuery;
+  }
+
+  // Pathname hints are also allowed only on trusted origins.
+  return readStatusFromPathname(parsed.pathname);
 }
 
 /** Razorpay 3DS / bank popups — https only; blocks javascript/file/data handoffs. */
@@ -134,11 +145,21 @@ export function isAllowedChallanPopupUrl(url: string): boolean {
   if (!url?.trim()) return false;
 
   const trimmed = url.trim();
-  if (trimmed === 'about:blank') return true;
+
+  if (trimmed === 'about:blank') {
+    return true;
+  }
 
   try {
     const parsed = new URL(trimmed);
-    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+
+    // Popup navigation must use HTTPS.
+    if (parsed.protocol !== 'https:') {
+      return false;
+    }
+
+    // Popup must belong to a trusted payment origin.
+    return TRUSTED_PAYMENT_ORIGINS.has(parsed.origin);
   } catch {
     return false;
   }

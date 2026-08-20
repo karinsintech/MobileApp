@@ -48,6 +48,7 @@ function writeKeys(
   userId?: number,
   customerId?: number,
 ): void {
+  if (!isEncryptedMmkvReady()) return;
   const payload = JSON.stringify({ threshold });
   const keys = [
     storageKey(userId, customerId),

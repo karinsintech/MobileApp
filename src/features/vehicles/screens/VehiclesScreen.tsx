@@ -6,7 +6,7 @@
 
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import {
-  View, Text, FlatList, StyleSheet, TouchableOpacity,
+  View, Text, FlatList, StyleSheet, Platform, TouchableOpacity,
   RefreshControl, ScrollView, Switch, Alert, ActivityIndicator,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
@@ -386,18 +386,23 @@ export default function VehiclesScreen() {
             ) : null}
           </TouchableOpacity>
           <View style={styles.right}>
-            <Switch
-              value={isStatusOn}
-              onValueChange={(checked) => confirmVehicleToggle(item, checked)}
-              disabled={isToggling}
-              trackColor={{
-                false: Colors.dangerLight,
-                true: Colors.success,
-              }}
-              thumbColor={Colors.white}
-              ios_backgroundColor={Colors.dangerLight}
-            />
-            <Text style={styles.yapStatus} numberOfLines={1}>{item.tagStatus}</Text>
+            <View style={styles.switchWrap}>
+              <Switch
+                value={isStatusOn}
+                onValueChange={(checked) => confirmVehicleToggle(item, checked)}
+                disabled={isToggling}
+                trackColor={{
+                  false: Colors.dangerLight,
+                  true: Colors.success,
+                }}
+                thumbColor={Colors.white}
+                ios_backgroundColor={Colors.dangerLight}
+                style={styles.statusSwitch}
+              />
+            </View>
+            <Text style={styles.yapStatus} numberOfLines={1} ellipsizeMode="tail">
+              {item.tagStatus}
+            </Text>
           </View>
         </View>
       </GlassCard>
@@ -602,10 +607,38 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   list: { paddingHorizontal: Spacing[4], gap: 8, paddingBottom: 32 },
-  card: { padding: 13 },
-  cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  left: { flex: 1, gap: 2, paddingRight: 8 },
-  right: { alignItems: 'flex-end', justifyContent: 'center', gap: 4, maxWidth: '42%' },
+  card: { padding: 13, overflow: 'hidden' },
+  // Keep plate/status on one row; iOS ignores % maxWidth on wrap-sized children,
+  // so a long yapStatus must not be allowed to grow the trailing column.
+  cardTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  left: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+    paddingRight: 10,
+  },
+  right: {
+    width: 118,
+    flexGrow: 0,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  switchWrap: {
+    width: '100%',
+    alignItems: 'flex-end',
+    justifyContent: 'flex-end',
+  },
+  // UISwitch layout box is wider than the knob; slight scale keeps the visual
+  // centered with ALLOCATED-length labels on every row.
+  statusSwitch: Platform.OS === 'ios'
+    ? { transform: [{ scaleX: 0.86 }, { scaleY: 0.86 }] }
+    : {},
   vehicleNo: {
     fontSize: FontSize.lg,
     fontWeight: '700',
@@ -615,6 +648,7 @@ const styles = StyleSheet.create({
   customer: { fontSize: FontSize.sm, color: Colors.text.secondary },
   group: { fontSize: FontSize.xs, color: Colors.text.subtle },
   yapStatus: {
+    width: '100%',
     fontSize: FontSize.xs,
     color: Colors.text.subtle,
     textAlign: 'right',

@@ -122,6 +122,15 @@ export default function VehicleFilterPanel({
     });
   }, [vehicles]);
 
+  // Search term for vehicle picker
+  const [vehicleSearch, setVehicleSearch] = useState('');
+
+  const filteredVehicles = useMemo(() => {
+    const q = vehicleSearch.trim().toLowerCase();
+    if (!q) return uniqueVehicles;
+    return uniqueVehicles.filter((v) => (v.vehicleNo ?? '').toLowerCase().includes(q));
+  }, [uniqueVehicles, vehicleSearch]);
+
   const customerLabel = customers.find((c) => c.yapEntityId === draft.customerId)
     ? `${draft.customerId} - ${customers.find((c) => c.yapEntityId === draft.customerId)?.firstName ?? ''}`
     : 'All customers';
@@ -195,20 +204,31 @@ export default function VehicleFilterPanel({
         </TouchableOpacity>
       </View>
 
-      <PickerModal visible={vehicleOpen} title="Vehicle No" onClose={() => setVehicleOpen(false)}>
+      <PickerModal visible={vehicleOpen} title="Vehicle No" onClose={() => { setVehicleOpen(false); setVehicleSearch(''); }}>
+        <TextInput
+          style={[styles.input, { marginBottom: 12 }]}
+          placeholder="Search vehicle"
+          placeholderTextColor={Colors.text.subtle}
+          value={vehicleSearch}
+          onChangeText={setVehicleSearch}
+          autoCapitalize="characters"
+          returnKeyType="done"
+        />
+
         <TouchableOpacity
           style={styles.modalItem}
-          onPress={() => { onChange({ ...draft, vehicleNo: '' }); setVehicleOpen(false); }}
+          onPress={() => { onChange({ ...draft, vehicleNo: '' }); setVehicleOpen(false); setVehicleSearch(''); }}
         >
           <Text style={styles.modalItemText}>All vehicles</Text>
         </TouchableOpacity>
-        {uniqueVehicles.map((vehicle) => (
+        {filteredVehicles.map((vehicle) => (
           <TouchableOpacity
             key={vehicle.vehicleNo}
             style={styles.modalItem}
             onPress={() => {
               onChange({ ...draft, vehicleNo: vehicle.vehicleNo });
               setVehicleOpen(false);
+              setVehicleSearch('');
             }}
           >
             <Text style={[styles.modalItemText, draft.vehicleNo === vehicle.vehicleNo && styles.modalItemActive]}>
