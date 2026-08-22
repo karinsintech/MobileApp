@@ -7,9 +7,10 @@
  * Toll transaction PDFs still require a VRN (volume), not this screen.
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, ScrollView,
+  Keyboard, Platform, Animated, Dimensions, type KeyboardEvent,
 } from 'react-native';
 import { Colors, FontSize, Spacing, Radius } from '../../../theme';
 import { requiresAdminContextPicker, isVehicleGroupAdmin, type RoleKey } from '../../../types/auth';
@@ -57,25 +58,118 @@ function SelectField({
   );
 }
 
+/**
+ * Bottom sheet picker that stays usable while the soft keyboard is open.
+ * Caps sheet height to the visible area and animates lift so search + list
+ * remain on-screen across devices (Modal often ignores activity adjustResize).
+ */
 function PickerModal({
   visible,
   title,
   onClose,
+  header,
   children,
 }: {
   visible: boolean;
   title: string;
   onClose: () => void;
+  /** Sticky content (e.g. search) kept above the scrollable options. */
+  header?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  const keyboardOffset = useRef(new Animated.Value(0)).current;
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const windowHeightOnOpen = useRef(Dimensions.get('window').height);
+  const windowHeight = Dimensions.get('window').height;
+
+  useEffect(() => {
+    if (!visible) {
+      keyboardOffset.setValue(0);
+      setKeyboardHeight(0);
+      return undefined;
+    }
+
+    // Baseline before keyboard — used to detect Android windows that already resized.
+    windowHeightOnOpen.current = Dimensions.get('window').height;
+
+    const animateTo = (toValue: number, event?: KeyboardEvent) => {
+      setKeyboardHeight(toValue);
+      Animated.timing(keyboardOffset, {
+        toValue,
+        // Match OS keyboard timing when available for a smoother handoff.
+        duration: event?.duration && event.duration > 0 ? event.duration : 250,
+        useNativeDriver: false,
+      }).start();
+    };
+
+    const handleKeyboardShow = (event: KeyboardEvent) => {
+      const reportedHeight = event?.endCoordinates?.height ?? 0;
+      const currentWindowHeight = Dimensions.get('window').height;
+      // Some Android builds resize the modal window; lifting by full keyboard height
+      // would push the sheet off-screen — only lift the uncovered remainder.
+      const alreadyAbsorbed = Math.max(0, windowHeightOnOpen.current - currentWindowHeight);
+      const lift = Math.max(0, reportedHeight - alreadyAbsorbed);
+      animateTo(lift, event);
+    };
+    const handleKeyboardHide = (event: KeyboardEvent) => {
+      animateTo(0, event);
+    };
+
+    // will* fires earlier on iOS so the sheet tracks the keyboard; did* is reliable on Android.
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, handleKeyboardShow);
+    const hideSub = Keyboard.addListener(hideEvent, handleKeyboardHide);
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [visible, keyboardOffset]);
+
+  // Available sheet height above the keyboard (or default ~72% when closed).
+  const sheetMaxHeight = keyboardHeight > 0
+    ? Math.max(windowHeight - keyboardHeight - 24, windowHeight * 0.35)
+    : windowHeight * 0.72;
+
+  // Title + optional search chrome — list gets an explicit maxHeight so it never
+  // collapses to 0 (flex:1 inside a maxHeight-only parent hides all options).
+  const chromeHeight = header ? 132 : 72;
+  const listMaxHeight = Math.max(sheetMaxHeight - chromeHeight, 140);
+
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={onClose}>
-        <View style={styles.modalSheet}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <TouchableOpacity
+          style={styles.modalBackdropTouch}
+          activeOpacity={1}
+          onPress={() => {
+            Keyboard.dismiss();
+            onClose();
+          }}
+        />
+        <Animated.View
+          style={[
+            styles.modalSheet,
+            {
+              maxHeight: sheetMaxHeight,
+              marginBottom: keyboardOffset,
+            },
+          ]}
+        >
           <Text style={styles.modalTitle}>{title}</Text>
-          <ScrollView>{children}</ScrollView>
-        </View>
-      </TouchableOpacity>
+          {header ? <View style={styles.modalHeader}>{header}</View> : null}
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            nestedScrollEnabled
+            contentContainerStyle={styles.modalContent}
+            style={{ maxHeight: listMaxHeight }}
+          >
+            {children}
+          </ScrollView>
+        </Animated.View>
+      </View>
     </Modal>
   );
 }
@@ -204,17 +298,25 @@ export default function VehicleFilterPanel({
         </TouchableOpacity>
       </View>
 
-      <PickerModal visible={vehicleOpen} title="Vehicle No" onClose={() => { setVehicleOpen(false); setVehicleSearch(''); }}>
-        <TextInput
-          style={[styles.input, { marginBottom: 12 }]}
-          placeholder="Search vehicle"
-          placeholderTextColor={Colors.text.subtle}
-          value={vehicleSearch}
-          onChangeText={setVehicleSearch}
-          autoCapitalize="characters"
-          returnKeyType="done"
-        />
-
+      <PickerModal
+        visible={vehicleOpen}
+        title="Vehicle No"
+        onClose={() => { setVehicleOpen(false); setVehicleSearch(''); }}
+        header={(
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search vehicle"
+            placeholderTextColor={Colors.text.subtle}
+            value={vehicleSearch}
+            onChangeText={setVehicleSearch}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            returnKeyType="done"
+            // Keep focus stable while the sheet animates above the keyboard.
+            blurOnSubmit={false}
+          />
+        )}
+      >
         <TouchableOpacity
           style={styles.modalItem}
           onPress={() => { onChange({ ...draft, vehicleNo: '' }); setVehicleOpen(false); setVehicleSearch(''); }}
@@ -396,15 +498,40 @@ const styles = StyleSheet.create({
   resetText: { fontSize: FontSize.sm, fontWeight: '600', color: Colors.text.secondary },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.55)',
     justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  modalBackdropTouch: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
   modalSheet: {
-    maxHeight: '60%',
     backgroundColor: Colors.navy,
     borderTopLeftRadius: Radius.xl,
     borderTopRightRadius: Radius.xl,
-    padding: Spacing[4],
+    paddingTop: Spacing[4],
+    paddingHorizontal: Spacing[4],
+    paddingBottom: Spacing[3],
+    zIndex: 1,
+  },
+  modalHeader: {
+    marginBottom: Spacing[2],
+  },
+  searchInput: {
+    backgroundColor: Colors.glass.bg,
+    borderWidth: 1,
+    borderColor: Colors.glass.border,
+    borderRadius: Radius.md,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: FontSize.sm,
+    color: Colors.white,
+  },
+  modalContent: {
+    paddingBottom: Spacing[2],
   },
   modalTitle: { fontSize: FontSize.lg, fontWeight: '700', color: Colors.white, marginBottom: Spacing[3] },
   modalItem: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: Colors.divider },
