@@ -10,6 +10,11 @@ import { LiquidBackground, GlassCard } from '../../../components';
 import { Colors, FontFamily, FontSize, Spacing, Radius } from '../../../theme';
 import type { AuthScreenProps } from '../../../navigation/types';
 import { SecureStorage } from '../../../services/storage/SecureStorage';
+import { assertPinLoginMobile } from '../../../services/auth/pinAuthService';
+import {
+  assertPinAttemptAllowed,
+  getPinLockRemainingMs,
+} from '../../../services/auth/pinAttemptGuard';
 import { PinEntryModal } from '../../profile/components/PinEntryModal';
 
 type Props = AuthScreenProps<'Login'>;
@@ -23,17 +28,21 @@ export default function LoginScreen({ navigation }: Props) {
   const [password, setPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
+  // Masked hint only — never pre-fill the full account identifier (MM-07).
+  const [pinMobileHint, setPinMobileHint] = useState<string | null>(null);
+  const [pinLoginReady, setPinLoginReady] = useState(false);
+  const [pinModalError, setPinModalError] = useState<string | null>(null);
   const passwordRef = useRef<TextInput>(null);
 
-  const loadSavedMobile = useCallback(() => {
-    const savedMobile = SecureStorage.getPinLoginMobile()
-      ?? SecureStorage.getLastLoginMobile();
-    if (savedMobile) setMobileNo(savedMobile);
+  const refreshPinIdentity = useCallback(() => {
+    const enabled = SecureStorage.isPinLoginEnabled() && SecureStorage.hasPinLoginIdentity();
+    setPinLoginReady(enabled);
+    setPinMobileHint(enabled ? SecureStorage.getPinLoginMobileHint() : null);
   }, []);
 
   useEffect(() => {
-    loadSavedMobile();
-  }, [loadSavedMobile]);
+    refreshPinIdentity();
+  }, [refreshPinIdentity]);
 
   const handleSignIn = async () => {
     if (!mobileNo.trim() || !password.trim()) {
@@ -59,17 +68,46 @@ export default function LoginScreen({ navigation }: Props) {
 
   const handleOpenPinLogin = () => {
     dispatch(clearError());
+    setPinModalError(null);
     const trimmedMobile = mobileNo.trim();
-
-    if (trimmedMobile.length !== 10) {
-      Alert.alert('Mobile required', 'Enter your 10-digit mobile number above, then sign in with PIN.');
+    const mobileError = assertPinLoginMobile(trimmedMobile);
+    if (mobileError) {
+      Alert.alert(
+        'Mobile required',
+        pinMobileHint
+          ? `Enter the full 10-digit number for +91 ${pinMobileHint}, then sign in with PIN.`
+          : mobileError,
+      );
       return;
     }
 
+    const lockError = assertPinAttemptAllowed(trimmedMobile);
+    if (lockError) setPinModalError(lockError);
     setShowPinModal(true);
   };
 
+  const handleForgetThisDevice = () => {
+    Alert.alert(
+      'Forget this device',
+      'Removes saved PIN login, device id, and local preferences from this handset.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Forget',
+          style: 'destructive',
+          onPress: async () => {
+            await SecureStorage.forgetThisDevice();
+            setMobileNo('');
+            setPassword('');
+            refreshPinIdentity();
+          },
+        },
+      ],
+    );
+  };
+
   const handlePinSignIn = async (pin: string) => {
+    setPinModalError(null);
     const result = await dispatch(signInWithPin({
       mobileNumber: mobileNo.trim(),
       pin,
@@ -77,7 +115,14 @@ export default function LoginScreen({ navigation }: Props) {
 
     if (signInWithPin.fulfilled.match(result)) {
       setShowPinModal(false);
+      setPinModalError(null);
+      return;
     }
+
+    const message =
+      (typeof result.payload === 'string' && result.payload.trim())
+      || 'Incorrect PIN. Try again.';
+    setPinModalError(message);
   };
 
   return (
@@ -99,6 +144,12 @@ export default function LoginScreen({ navigation }: Props) {
           <GlassCard style={styles.formCard}>
             <Text style={styles.heading}>Sign In</Text>
             <Text style={styles.subheading}>Access your fleet command center</Text>
+
+            {pinLoginReady && pinMobileHint ? (
+              <Text style={styles.pinHint}>
+                PIN login saved for +91 {pinMobileHint} — enter the full number below
+              </Text>
+            ) : null}
 
             <View style={styles.inputWrapper}>
               <View style={styles.flagRow}>
@@ -175,6 +226,17 @@ export default function LoginScreen({ navigation }: Props) {
               <Text style={styles.pinIcon}>🔢</Text>
               <Text style={styles.pinText}>Sign in with PIN</Text>
             </TouchableOpacity>
+
+            {pinLoginReady ? (
+              <TouchableOpacity
+                style={styles.forgetDeviceBtn}
+                onPress={handleForgetThisDevice}
+                disabled={isLoading}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.forgetDeviceText}>Forget this device</Text>
+              </TouchableOpacity>
+            ) : null}
           </GlassCard>
 
           <TouchableOpacity
@@ -190,9 +252,18 @@ export default function LoginScreen({ navigation }: Props) {
 
       <PinEntryModal
         visible={showPinModal}
-        subtitle={`Enter the 4-digit PIN for +91 ${mobileNo.trim() || 'your mobile'}`}
+        subtitle={
+          pinMobileHint
+            ? `Enter the 4-digit PIN for +91 ${pinMobileHint}`
+            : `Enter the 4-digit PIN for +91 ${mobileNo.trim() || 'your mobile'}`
+        }
+        error={pinModalError}
         isLoading={isLoading}
-        onCancel={() => setShowPinModal(false)}
+        locked={getPinLockRemainingMs(mobileNo.trim()) > 0}
+        onCancel={() => {
+          setShowPinModal(false);
+          setPinModalError(null);
+        }}
         onSubmit={handlePinSignIn}
       />
     </LiquidBackground>
@@ -240,6 +311,14 @@ const styles = StyleSheet.create({
   },
   pinIcon: { fontSize: 20 },
   pinText: { fontSize: FontSize.base, fontWeight: '700', color: Colors.white },
+  pinHint: {
+    fontSize: FontSize.sm,
+    color: 'rgba(255,255,255,0.82)',
+    marginBottom: Spacing[3],
+    lineHeight: 18,
+  },
+  forgetDeviceBtn: { alignSelf: 'center', marginTop: Spacing[4], paddingVertical: 4 },
+  forgetDeviceText: { fontSize: FontSize.sm, color: Colors.dangerLight, fontWeight: '600' },
   securityNote: { textAlign: 'center', fontSize: FontSize.xs, color: 'rgba(255,255,255,0.78)', letterSpacing: 0.5, marginTop: Spacing[4] },
   demoLink:     { alignSelf: 'center', marginTop: Spacing[4] },
   demoLinkText: { fontSize: FontSize.base, color: Colors.text.subtle, fontWeight: '500' },

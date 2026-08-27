@@ -1,3 +1,8 @@
+/**
+ * PIN entry modal — explicit Continue submit (no auto-submit on 4th digit).
+ * Errors and lockout messages render inside the card (MM-03).
+ */
+
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Modal,
@@ -16,7 +21,10 @@ interface PinEntryModalProps {
   visible: boolean;
   title?: string;
   subtitle?: string;
+  error?: string | null;
   isLoading?: boolean;
+  /** When true, disable input/submit (client lockout). */
+  locked?: boolean;
   onCancel: () => void;
   onSubmit: (pin: string) => void;
 }
@@ -25,7 +33,9 @@ export function PinEntryModal({
   visible,
   title = 'Enter PIN',
   subtitle = 'Use your 4-digit account PIN',
+  error = null,
   isLoading = false,
+  locked = false,
   onCancel,
   onSubmit,
 }: PinEntryModalProps) {
@@ -35,17 +45,23 @@ export function PinEntryModal({
   useEffect(() => {
     if (visible) {
       setPin('');
-      setTimeout(() => inputRef.current?.focus(), 200);
+      if (!locked) {
+        setTimeout(() => inputRef.current?.focus(), 200);
+      }
     }
-  }, [visible]);
+  }, [visible, locked]);
+
+  // Clear digits after a failed attempt so the next guess is intentional.
+  useEffect(() => {
+    if (error) setPin('');
+  }, [error]);
 
   const handleChange = (value: string) => {
     const digits = value.replace(/\D/g, '').slice(0, 4);
     setPin(digits);
-    if (digits.length === 4) {
-      onSubmit(digits);
-    }
   };
+
+  const canSubmit = pin.length === 4 && !isLoading && !locked;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
@@ -59,16 +75,21 @@ export function PinEntryModal({
 
           <TextInput
             ref={inputRef}
-            style={styles.input}
+            style={[styles.input, error ? styles.inputError : null]}
             value={pin}
             onChangeText={handleChange}
             keyboardType="number-pad"
             maxLength={4}
             secureTextEntry
-            editable={!isLoading}
+            editable={!isLoading && !locked}
             placeholder="••••"
             placeholderTextColor={Colors.text.subtle}
+            onSubmitEditing={() => {
+              if (canSubmit) onSubmit(pin);
+            }}
           />
+
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
           <View style={styles.actions}>
             <TouchableOpacity
@@ -79,9 +100,9 @@ export function PinEntryModal({
               <Text style={styles.cancelText}>Cancel</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.submitBtn, (pin.length !== 4 || isLoading) && styles.submitBtnDisabled]}
+              style={[styles.submitBtn, !canSubmit && styles.submitBtnDisabled]}
               onPress={() => onSubmit(pin)}
-              disabled={pin.length !== 4 || isLoading}
+              disabled={!canSubmit}
             >
               {isLoading ? (
                 <ActivityIndicator color={Colors.navy} />
@@ -124,6 +145,13 @@ const styles = StyleSheet.create({
     borderColor: Colors.glass.border,
     borderRadius: Radius.lg,
     paddingVertical: Spacing[4],
+  },
+  inputError: { borderColor: Colors.dangerBorder },
+  errorText: {
+    fontSize: FontSize.sm,
+    color: Colors.dangerLight,
+    fontWeight: '600',
+    lineHeight: 18,
   },
   actions: { flexDirection: 'row', gap: Spacing[3], marginTop: Spacing[2] },
   cancelBtn: {

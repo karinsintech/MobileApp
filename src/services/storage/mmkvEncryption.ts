@@ -2,15 +2,16 @@
  * Per-install MMKV encryption key — stored in Keychain so disk dumps of the
  * MMKV files are ciphertext (MASVS-STORAGE-1/2).
  *
- * Accessibility is AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY so backgroundFleetSync
- * can still decrypt after reboot once the user has unlocked once. The JWT is
- * never stored in MMKV on production builds.
+ * Accessibility is WHEN_UNLOCKED_THIS_DEVICE_ONLY (no iCloud backup, device-bound).
+ * The JWT uses AFTER_FIRST_UNLOCK separately so backgroundFleetSync can still
+ * authenticate after reboot; MMKV ciphertext is unavailable until unlock.
  *
  * First-launch / first-encrypted-build: if Keychain has no key yet, MMKV is
  * created with a new key and previous plaintext files become unreadable — a
  * one-time cache miss. Session restore still uses the Keychain JWT.
  */
 
+import 'react-native-get-random-values';
 import * as Keychain from 'react-native-keychain';
 
 const MMKV_KEYCHAIN_SERVICE = 'com.karins.fleet.mmkv-encryption';
@@ -20,16 +21,19 @@ const MMKV_KEY_BYTES = 32;
 let cachedEncryptionKey: string | null = null;
 let persistPromise: Promise<string> | null = null;
 
+/**
+ * Builds a hex-encoded key using the platform CSPRNG only.
+ * Math.random is never acceptable for encryption-key material.
+ */
 function randomBytesHex(length: number): string {
   const bytes = new Uint8Array(length);
   const cryptoObj = globalThis.crypto as Crypto | undefined;
-  if (cryptoObj?.getRandomValues) {
-    cryptoObj.getRandomValues(bytes);
-  } else {
-    for (let i = 0; i < length; i += 1) {
-      bytes[i] = Math.floor(Math.random() * 256);
-    }
+  if (!cryptoObj?.getRandomValues) {
+    throw new Error(
+      'CSPRNG unavailable — import react-native-get-random-values before generating MMKV keys.',
+    );
   }
+  cryptoObj.getRandomValues(bytes);
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 

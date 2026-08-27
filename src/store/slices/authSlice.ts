@@ -87,6 +87,12 @@ async function persistSession(
   } catch {
     // Best-effort — logout still resolves hardware id at sign-out time.
   }
+  try {
+    const { ensureSessionUnlockGate } = await import('../../services/session/sessionPrivacy');
+    await ensureSessionUnlockGate();
+  } catch {
+    // Biometry gate is optional on emulators without a device passcode.
+  }
 }
 
 export const signIn = createAsyncThunk<
@@ -229,6 +235,12 @@ export const restoreSession = createAsyncThunk<
     }
 
     markApiSessionActive();
+    try {
+      const { ensureSessionUnlockGate } = await import('../../services/session/sessionPrivacy');
+      await ensureSessionUnlockGate();
+    } catch {
+      // Biometry gate optional when the device has no enrolled biometrics/passcode.
+    }
     return { user };
   },
 );
@@ -262,9 +274,15 @@ export const syncDefaultCustomerSession = createAsyncThunk<
   },
 );
 
-export const signOut = createAsyncThunk<void, void>(
+export type SignOutOptions = {
+  /** Also wipe PIN hash/hint so the next user sees a blank login (MM-07). */
+  forgetDevice?: boolean;
+};
+
+export const signOut = createAsyncThunk<void, SignOutOptions | undefined>(
   'auth/signOut',
-  async () => {
+  async (options) => {
+    const forgetDevice = options?.forgetDevice === true;
     const deviceId = await resolveLogoutDeviceId();
 
     // Bearer is still in Keychain until clearAll — server invalidates the session.
@@ -281,7 +299,7 @@ export const signOut = createAsyncThunk<void, void>(
     }
 
     invalidateApiSession();
-    await SecureStorage.clearAll();
+    await SecureStorage.clearAll({ forgetDevice });
   },
 );
 

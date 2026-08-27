@@ -2,6 +2,9 @@
  * @format
  */
 
+// CSPRNG polyfill must load before any module that generates crypto material
+// (MMKV encryption key). RN/Hermes does not ship WebCrypto.
+import 'react-native-get-random-values';
 import 'react-native-gesture-handler';
 import { enableFreeze, enableScreens } from 'react-native-screens';
 import { AppRegistry } from 'react-native';

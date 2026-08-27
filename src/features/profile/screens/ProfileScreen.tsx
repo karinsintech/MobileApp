@@ -246,6 +246,23 @@ export default function ProfileScreen() {
     ]);
   };
 
+  const handleForgetThisDevice = () => {
+    Alert.alert(
+      'Forget this device',
+      'Signs you out and removes PIN login, device id, and local preferences from this handset. Use this before selling or sharing the phone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Forget device',
+          style: 'destructive',
+          onPress: async () => {
+            await dispatch(signOut({ forgetDevice: true }));
+          },
+        },
+      ],
+    );
+  };
+
   const showCorporate = profile
     ? hasWalletValues(profile.corporateYesBank) || hasWalletValues(profile.corporateIdfc)
     : false;
@@ -334,6 +351,13 @@ export default function ProfileScreen() {
             icon="🔑"
             label="Change Password"
             onPress={() => nav.navigate('ChangePassword')}
+          />
+          <View style={styles.divider} />
+          <SettingRow
+            icon="🗑"
+            label="Forget this device"
+            onPress={handleForgetThisDevice}
+            danger
           />
         </GlassCard>
 

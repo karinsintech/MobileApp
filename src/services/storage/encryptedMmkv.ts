@@ -18,6 +18,7 @@ const AUTH_META_ID = 'karins-fleet-auth-meta-enc';
 const WALLET_ALERTS_ID = 'karins-fleet-wallet-alerts-enc';
 
 const MIGRATION_FLAG = 'mmkv_enc_migrated_v1';
+// Legacy plaintext JWT fallback key — never promote into encrypted stores.
 const SKIP_PLAINTEXT_KEYS = new Set(['access_token_fallback']);
 
 let cacheStore: MMKV | null = null;
@@ -89,6 +90,10 @@ function migrateFromPlaintext(): void {
   } catch {
     // Missing plaintext stores — first install or already wiped.
   }
+
+  // Drop any leftover JWT that was written under the old iOS MMKV fallback.
+  cacheStore?.delete('access_token_fallback');
+  authMetaStore?.delete('access_token_fallback');
 
   cacheStore?.set(MIGRATION_FLAG, true);
 }

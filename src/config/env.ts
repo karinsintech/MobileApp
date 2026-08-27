@@ -6,6 +6,8 @@
  *   `false`, so `ENABLE_MOCK_DATA` is always `false` — mock data can never ship.
  * - The API base URL is read from the native env when provided, otherwise the
  *   production host used by the Android APK.
+ * - BLOCK_ON_ROOT is consumed at App bootstrap (deviceIntegrity) before
+ *   restoreSession — not a decorative flag (MM-09 / MASVS-RESILIENCE-1).
  */
 
 declare const __DEV__: boolean;
@@ -33,6 +35,22 @@ export const API_BASE_URL: string =
 
 /** Network request timeout (ms). */
 export const API_TIMEOUT_MS = 20000;
+
+function readEnvFlag(name: string, defaultValue: boolean): boolean {
+  const raw =
+    typeof process !== "undefined" && process.env
+      ? process.env[name]
+      : undefined;
+  if (raw == null || raw === "") return defaultValue;
+  return raw === "true" || raw === "1";
+}
+
+/**
+ * Refuse to run on rooted / jailbroken / hooked devices.
+ * Default: ON in release, OFF in __DEV__ (emulators often trip heuristics).
+ * Override with KARINS_BLOCK_ON_ROOT=true|false at build time.
+ */
+export const BLOCK_ON_ROOT: boolean = readEnvFlag("KARINS_BLOCK_ON_ROOT", !IS_DEV);
 
 // Production (live cron / FCM): https://api.karins.in/api
 // Test API only: https://testapi.karins.in/api

@@ -2,9 +2,13 @@
  * Karins Fleet Mobile App — Root Entry Point
  * React Native 0.86 · TypeScript · Redux · React Navigation
  *
- * Security:
- * - Tokens stored in Keychain only
- * - Passwords NEVER stored
+ * Security (MASVS-AUTH / STORAGE / RESILIENCE):
+ * - Access token in Keychain (AFTER_FIRST_UNLOCK) — never MMKV
+ * - Passwords never stored on device
+ * - MMKV encrypted with a per-install Keychain key
+ * - Session privacy: opaque cover on inactive, idle timeout, biometry re-entry
+ * - Android FLAG_SECURE blocks screenshots / Recents thumbnails
+ * - BLOCK_ON_ROOT (jail-monkey) runs before restoreSession
  */
 
 import React, { useEffect, useState } from 'react';
@@ -21,7 +25,10 @@ import {
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { LaunchSplashScreen } from './src/features/splash/LaunchSplashScreen';
 import { OfflineBanner } from './src/components/common/OfflineBanner';
+import { SessionPrivacyGate } from './src/features/session/SessionPrivacyGate';
+import { CompromisedDeviceScreen } from './src/features/security/CompromisedDeviceScreen';
 import { purgeOldExports } from './src/utils/fileExport';
+import { BLOCK_ON_ROOT } from './src/config/env';
 
 // Suppress known harmless warnings in dev
 LogBox.ignoreLogs([
@@ -33,6 +40,7 @@ function AppWithProviders() {
     <View style={{ flex: 1 }}>
       <OfflineBanner />
       <RootNavigator />
+      <SessionPrivacyGate />
     </View>
   );
 }
@@ -40,17 +48,30 @@ function AppWithProviders() {
 
 export default function App() {
   const [showLaunchSplash, setShowLaunchSplash] = useState(true);
+  const [integrityBlocked, setIntegrityBlocked] = useState(false);
+  const [integrityReasons, setIntegrityReasons] = useState<string[]>([]);
 
-  // Restore session + dashboard context on cold start.
-  // Create the Android FCM channel immediately so tray pushes are not dropped
-  // while the post-login splash still blocks the authenticated push hook.
   useEffect(() => {
     purgeOldExports().catch(() => {
       // Cleanup failure should not block app startup
     });
   }, []);
+
   useEffect(() => {
     (async () => {
+      // Integrity first — never rehydrate a Keychain session on a compromised device.
+      if (BLOCK_ON_ROOT) {
+        const { assessDeviceIntegrity } = await import(
+          './src/services/security/deviceIntegrity'
+        );
+        const report = await assessDeviceIntegrity();
+        if (report.isCompromised) {
+          setIntegrityReasons(report.reasons);
+          setIntegrityBlocked(true);
+          return;
+        }
+      }
+
       const { initEncryptedMmkv } = await import('./src/services/storage/encryptedMmkv');
       await initEncryptedMmkv();
       const { pushService } = await import('./src/services/notifications/pushService');
@@ -70,7 +91,9 @@ export default function App() {
             "light" = light icons on our navy UI.
           */}
           <SystemBars style="light" />
-          {showLaunchSplash ? (
+          {integrityBlocked ? (
+            <CompromisedDeviceScreen reasons={integrityReasons} />
+          ) : showLaunchSplash ? (
             <LaunchSplashScreen onDone={() => setShowLaunchSplash(false)} />
           ) : (
             <AppWithProviders />

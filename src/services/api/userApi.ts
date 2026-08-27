@@ -5,6 +5,7 @@ export const userApi = {
     apiClient.post('/user/set-pin', payload),
 
   changePin: (payload: {
+    currentPin: string;
     pin: string;
     confirmPin: string;
   }) => apiClient.put('/user/change-pin', payload),

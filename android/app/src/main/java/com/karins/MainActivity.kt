@@ -29,8 +29,8 @@ class MainActivity : ReactActivity() {
    */
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(null)
-     // Prevent screenshots, screen recording, and Android Recents
-  // thumbnails from exposing sensitive application content.
+  // Prevent screenshots, screen recording, and Android Recents
+  // thumbnails from exposing sensitive application content (MM-01 / MASVS-PLATFORM-3).
   window.setFlags(
     WindowManager.LayoutParams.FLAG_SECURE,
     WindowManager.LayoutParams.FLAG_SECURE

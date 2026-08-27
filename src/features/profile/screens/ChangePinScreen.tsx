@@ -1,6 +1,6 @@
 /**
  * Change the logged-in user's 4-digit account PIN.
- * Current PIN is not required — users often forget it while still signed in.
+ * Requires the current PIN so an unattended session cannot silently take over (MM-03).
  */
 
 import React, { useState } from 'react';
@@ -15,6 +15,13 @@ import {
   View,
 } from 'react-native';
 import { userApi } from '../../../services/api/userApi';
+import {
+  assertPinAttemptAllowed,
+  clearPinAttempts,
+  recordPinFailure,
+} from '../../../services/auth/pinAttemptGuard';
+import { SecureStorage } from '../../../services/storage/SecureStorage';
+import { useAppSelector } from '../../../store';
 import { LiquidBackground, GlassCard, ScreenHeader } from '../../../components';
 import { Colors, FontSize, Spacing, Radius } from '../../../theme';
 import type { MoreScreenProps } from '../../../navigation/types';
@@ -48,29 +55,71 @@ function PinField({
 }
 
 export default function ChangePinScreen({ navigation }: Props) {
+  const userId = useAppSelector((s) => s.auth.user?.userId);
+  const [currentPin, setCurrentPin] = useState('');
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Scope lockout to this account — never the masked hint string.
+  const attemptScope =
+    SecureStorage.getLastLoginMobile() ?? `user:${userId ?? 'session'}`;
 
   const handleSubmit = async () => {
+    setError(null);
+
+    if (currentPin.length !== 4) {
+      setError('Enter your current 4-digit PIN.');
+      return;
+    }
     if (pin.length !== 4) {
-      Alert.alert('Invalid PIN', 'PIN must be exactly 4 digits.');
+      setError('New PIN must be exactly 4 digits.');
       return;
     }
     if (pin !== confirmPin) {
-      Alert.alert('Mismatch', 'New PIN and confirmation do not match.');
+      setError('New PIN and confirmation do not match.');
+      return;
+    }
+    if (pin === currentPin) {
+      setError('New PIN must be different from the current PIN.');
+      return;
+    }
+
+    const lockError = assertPinAttemptAllowed(attemptScope);
+    if (lockError) {
+      setError(lockError);
       return;
     }
 
     setLoading(true);
     try {
-      // Same payload shape as set-pin so backend validation accepts it cleanly
-      await userApi.changePin({ pin, confirmPin });
+      // Prove possession of the current PIN before accepting a replacement.
+      const { data: verified } = await userApi.verifyPin({ pin: currentPin });
+      if (!verified?.isVerified) {
+        setError(recordPinFailure(attemptScope));
+        setCurrentPin('');
+        return;
+      }
+
+      await userApi.changePin({
+        currentPin,
+        pin,
+        confirmPin,
+      });
+      clearPinAttempts(attemptScope);
       Alert.alert('Success', 'PIN changed successfully.', [
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);
     } catch (err: any) {
-      Alert.alert('Error', err?.message ?? 'Could not change PIN. Please try again.');
+      const message = err?.message ?? 'Could not change PIN. Please try again.';
+      // Wrong current PIN from the API still counts toward lockout.
+      if (/pin|incorrect|invalid|unauthorized|403|401/i.test(String(message))) {
+        setError(recordPinFailure(attemptScope));
+        setCurrentPin('');
+      } else {
+        setError(message);
+      }
     } finally {
       setLoading(false);
     }
@@ -81,12 +130,15 @@ export default function ChangePinScreen({ navigation }: Props) {
       <ScreenHeader title="Change PIN" showBack />
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         <Text style={styles.subtitle}>
-          Choose a new 4-digit PIN. You do not need your current PIN.
+          Enter your current PIN, then choose a new 4-digit PIN.
         </Text>
 
         <GlassCard style={styles.card}>
+          <PinField label="Current PIN" value={currentPin} onChangeText={setCurrentPin} />
           <PinField label="New PIN" value={pin} onChangeText={setPin} />
           <PinField label="Confirm new PIN" value={confirmPin} onChangeText={setConfirmPin} />
+
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
           <TouchableOpacity
             style={[styles.submitBtn, loading && styles.submitBtnDisabled]}
@@ -127,6 +179,12 @@ const styles = StyleSheet.create({
     fontSize: FontSize.base,
     color: Colors.white,
     letterSpacing: 4,
+  },
+  errorText: {
+    fontSize: FontSize.sm,
+    color: Colors.dangerLight,
+    fontWeight: '600',
+    lineHeight: 18,
   },
   submitBtn: {
     backgroundColor: Colors.yellow,
