@@ -1,9 +1,11 @@
 /**
  * Session privacy gate — opaque cover on AppState inactive/background plus
- * biometric/PIN re-entry only after idle timeout (MM-01).
+ * biometric/password re-entry only after idle timeout (MM-01).
  *
  * Mounted only while authenticated so login screens stay usable.
  * Fingerprint is never requested on open/sign-in — only after idle + Unlock tap.
+ * When biometrics are unavailable (or via Sign-in options), unlock with the
+ * same mobile account password used on the login screen.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -13,8 +15,10 @@ import {
   type AppStateStatus,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
+  Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAppSelector } from '../../store';
@@ -29,14 +33,10 @@ import {
   markSessionLeftAt,
 } from '../../services/session/sessionPrivacy';
 import { SecureStorage } from '../../services/storage/SecureStorage';
-import { userApi } from '../../services/api/userApi';
-import {
-  assertPinAttemptAllowed,
-  clearPinAttempts,
-  getPinLockRemainingMs,
-  recordPinFailure,
-} from '../../services/auth/pinAttemptGuard';
-import { PinEntryModal } from '../profile/components/PinEntryModal';
+import { authApi } from '../../services/api/authApi';
+import { getApiErrorMessage } from '../../services/api/client';
+
+type UnlockMethod = 'biometric' | 'password';
 
 export function SessionPrivacyGate() {
   const insets = useSafeAreaInsets();
@@ -45,11 +45,15 @@ export function SessionPrivacyGate() {
   const [needsUnlock, setNeedsUnlock] = useState(false);
   const [isUnlocking, setIsUnlocking] = useState(false);
   const [unlockError, setUnlockError] = useState<string | null>(null);
-  // When biometry is enrolled, offer account PIN as an alternate unlock path.
-  const [showPinOption, setShowPinOption] = useState(false);
-  const [showPinModal, setShowPinModal] = useState(false);
-  const [pinModalError, setPinModalError] = useState<string | null>(null);
-  const [isPinUnlocking, setIsPinUnlocking] = useState(false);
+
+  const [biometryAvailable, setBiometryAvailable] = useState(false);
+  const [unlockMethod, setUnlockMethod] = useState<UnlockMethod>('biometric');
+
+  const [password, setPassword] = useState('');
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [isPasswordUnlocking, setIsPasswordUnlocking] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const passwordInputRef = useRef<TextInput>(null);
 
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   // Refs keep AppState handler from clearing a lock when the biometric sheet
@@ -71,9 +75,9 @@ export function SessionPrivacyGate() {
       setNeedsUnlock(false);
       needsUnlockRef.current = false;
       setUnlockError(null);
-      setShowPinOption(false);
-      setShowPinModal(false);
-      setPinModalError(null);
+      setPassword('');
+      setPasswordError(null);
+      setUnlockMethod('biometric');
       return;
     }
 
@@ -90,21 +94,20 @@ export function SessionPrivacyGate() {
     }
   }, [isAuthenticated]);
 
-  // Resolve whether to surface "Use PIN" once the lock screen is required.
+  // Prefer fingerprint when enrolled; otherwise land on password + Sign-in options.
   useEffect(() => {
-    if (!isAuthenticated || !needsUnlock) {
-      setShowPinOption(false);
-      return;
-    }
+    if (!isAuthenticated || !needsUnlock) return;
 
     let cancelled = false;
     void (async () => {
       const biometry = await isDeviceBiometryAvailable();
-      const pinReady =
-        SecureStorage.isPinLoginEnabled() && SecureStorage.hasPinLoginIdentity();
-      if (!cancelled) {
-        setShowPinOption(biometry && pinReady);
-      }
+      if (cancelled) return;
+      setBiometryAvailable(biometry);
+      // No fingerprint → password screen. Fingerprint → Unlock first.
+      setUnlockMethod(biometry ? 'biometric' : 'password');
+      setPassword('');
+      setPasswordError(null);
+      setShowPassword(false);
     })();
 
     return () => {
@@ -112,14 +115,22 @@ export function SessionPrivacyGate() {
     };
   }, [isAuthenticated, needsUnlock]);
 
+  useEffect(() => {
+    if (needsUnlock && unlockMethod === 'password') {
+      const t = setTimeout(() => passwordInputRef.current?.focus(), 250);
+      return () => clearTimeout(t);
+    }
+    return undefined;
+  }, [needsUnlock, unlockMethod]);
+
   const clearLock = useCallback(() => {
     clearSessionLeftAt();
     needsUnlockRef.current = false;
     setNeedsUnlock(false);
     setIsCovered(false);
     setUnlockError(null);
-    setShowPinModal(false);
-    setPinModalError(null);
+    setPassword('');
+    setPasswordError(null);
   }, []);
 
   const tryUnlock = useCallback(async () => {
@@ -140,44 +151,70 @@ export function SessionPrivacyGate() {
     }
   }, [clearLock]);
 
-  const handleOpenPinUnlock = useCallback(() => {
-    setUnlockError(null);
-    setPinModalError(null);
+  const handlePasswordUnlock = useCallback(async () => {
     const mobile = SecureStorage.getLastLoginMobile()?.trim() ?? '';
-    const lockError = mobile ? assertPinAttemptAllowed(mobile) : null;
-    if (lockError) setPinModalError(lockError);
-    setShowPinModal(true);
-  }, []);
-
-  const handlePinUnlock = useCallback(async (pin: string) => {
-    const mobile = SecureStorage.getLastLoginMobile()?.trim() ?? 'session';
-    const lockError = assertPinAttemptAllowed(mobile);
-    if (lockError) {
-      setPinModalError(lockError);
+    if (!mobile || mobile.length !== 10) {
+      setPasswordError('Saved mobile number is missing. Sign in again from the login screen.');
+      return;
+    }
+    if (!password.trim()) {
+      setPasswordError('Enter your password.');
       return;
     }
 
-    setIsPinUnlocking(true);
-    setPinModalError(null);
+    setIsPasswordUnlocking(true);
+    setPasswordError(null);
     try {
-      const { data } = await userApi.verifyPin({ pin });
-      if (!data?.isVerified) {
-        setPinModalError(recordPinFailure(mobile));
+      // Re-verify with the same mobile + password credentials used at login.
+      const { data } = await authApi.signIn({
+        username: mobile,
+        password: password.trim(),
+      });
+      if (!data?.accessToken) {
+        setPasswordError('Unable to verify password. Try again.');
         return;
       }
-      clearPinAttempts(mobile);
+      await SecureStorage.setAccessToken(data.accessToken);
       clearLock();
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Incorrect PIN.';
-      if (/pin|incorrect|invalid|unauthorized|403|401/i.test(message)) {
-        setPinModalError(recordPinFailure(mobile));
-      } else {
-        setPinModalError(message);
-      }
+      setPasswordError(getApiErrorMessage(err, 'Incorrect password.'));
+      setPassword('');
     } finally {
-      setIsPinUnlocking(false);
+      setIsPasswordUnlocking(false);
     }
-  }, [clearLock]);
+  }, [password, clearLock]);
+
+  const handleSignInOptions = useCallback(() => {
+    const buttons: Array<{
+      text: string;
+      style?: 'cancel' | 'default' | 'destructive';
+      onPress?: () => void;
+    }> = [];
+
+    if (biometryAvailable) {
+      buttons.push({
+        text: 'Fingerprint',
+        onPress: () => {
+          setUnlockMethod('biometric');
+          setPassword('');
+          setPasswordError(null);
+          setUnlockError(null);
+        },
+      });
+    }
+    buttons.push({
+      text: 'Password',
+      onPress: () => {
+        setUnlockMethod('password');
+        setPassword('');
+        setPasswordError(null);
+        setUnlockError(null);
+      },
+    });
+    buttons.push({ text: 'Cancel', style: 'cancel' });
+
+    Alert.alert('Sign-in options', 'Choose how to unlock your session', buttons);
+  }, [biometryAvailable]);
 
   useEffect(() => {
     if (!isAuthenticated) return undefined;
@@ -191,8 +228,7 @@ export function SessionPrivacyGate() {
         // Skip re-stamping while already locked or while the biometric sheet is up;
         // those flips would otherwise reset the idle clock / clear the lock.
         if (prev === 'active' && !needsUnlockRef.current && !isUnlockingRef.current) {
-          const now = Date.now();
-          markSessionLeftAt(now);
+          markSessionLeftAt(Date.now());
         }
         setIsCovered(true);
         setUnlockError(null);
@@ -201,7 +237,7 @@ export function SessionPrivacyGate() {
 
       if (next !== 'active') return;
 
-      // Stay locked until Unlock / PIN succeeds — ignore prompt-related resumes.
+      // Stay locked until Unlock / password succeeds — ignore prompt-related resumes.
       if (needsUnlockRef.current) {
         setIsCovered(true);
         return;
@@ -228,32 +264,87 @@ export function SessionPrivacyGate() {
 
   if (!isAuthenticated || !isCovered) return null;
 
-  const pinScope = SecureStorage.getLastLoginMobile()?.trim() ?? '';
-  const pinLocked = pinScope ? getPinLockRemainingMs(pinScope) > 0 : false;
+  const showPasswordEntry = needsUnlock && unlockMethod === 'password';
+  const showBiometricUnlock = needsUnlock && unlockMethod === 'biometric';
+  const canSubmitPassword = password.trim().length > 0 && !isPasswordUnlocking;
+  const mobileHint = SecureStorage.getLastLoginMobile()?.trim() ?? '';
 
   return (
-    <>
-      <View
-        style={styles.cover}
-        pointerEvents="auto"
-        accessibilityViewIsModal
-        accessibilityLabel="Session locked"
-      >
-        <View style={[styles.inner, { paddingTop: insets.top + 48, paddingBottom: insets.bottom + 24 }]}>
-          <Text style={styles.brandKarins}>Karins</Text>
-          <Text style={styles.brandFleet}>fleet</Text>
-          <Text style={styles.subtitle}>
-            {needsUnlock
-              ? 'Session locked — confirm it is you to continue'
-              : 'Securing your session'}
-          </Text>
-
-          {needsUnlock ? (
+    <View
+      style={styles.cover}
+      pointerEvents="auto"
+      accessibilityViewIsModal
+      accessibilityLabel="Session locked"
+    >
+      <View style={[styles.inner, { paddingTop: insets.top + 48, paddingBottom: insets.bottom + 24 }]}>
+        {!needsUnlock ? (
+          <>
+            <Text style={styles.brandKarins}>Karins</Text>
+            <Text style={styles.brandFleet}>fleet</Text>
+            <Text style={styles.subtitle}>Securing your session</Text>
+          </>
+        ) : showPasswordEntry ? (
+          <View style={styles.passwordPanel}>
+            <Text style={styles.lockIcon} accessibilityLabel="Password">🔒</Text>
+            <Text style={styles.passwordTitle}>Enter your password</Text>
+            {mobileHint ? (
+              <Text style={styles.passwordHint}>+91 {mobileHint}</Text>
+            ) : null}
+            <View style={[styles.passwordRow, passwordError ? styles.passwordRowError : null]}>
+              <TextInput
+                ref={passwordInputRef}
+                style={styles.passwordInput}
+                value={password}
+                onChangeText={(value) => {
+                  setPassword(value);
+                  setPasswordError(null);
+                }}
+                secureTextEntry={!showPassword}
+                editable={!isPasswordUnlocking}
+                placeholder="Password"
+                placeholderTextColor="rgba(255,255,255,0.45)"
+                autoCapitalize="none"
+                autoCorrect={false}
+                textContentType="password"
+                importantForAutofill="no"
+                onSubmitEditing={() => {
+                  if (canSubmitPassword) void handlePasswordUnlock();
+                }}
+              />
+              <TouchableOpacity
+                onPress={() => setShowPassword((v) => !v)}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={styles.eyeBtn}
+              >
+                <Text style={styles.eyeIcon}>{showPassword ? '🙈' : '👁'}</Text>
+              </TouchableOpacity>
+            </View>
+            {passwordError ? <Text style={styles.error}>{passwordError}</Text> : null}
+            <TouchableOpacity
+              style={[styles.unlockBtn, !canSubmitPassword && styles.unlockBtnDisabled]}
+              onPress={() => { void handlePasswordUnlock(); }}
+              disabled={!canSubmitPassword}
+              activeOpacity={0.85}
+            >
+              {isPasswordUnlocking ? (
+                <ActivityIndicator color={Colors.navy} />
+              ) : (
+                <Text style={styles.unlockText}>Continue</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        ) : showBiometricUnlock ? (
+          <>
+            <Text style={styles.brandKarins}>Karins</Text>
+            <Text style={styles.brandFleet}>fleet</Text>
+            <Text style={styles.subtitle}>
+              Session locked — confirm it is you to continue
+            </Text>
             <View style={styles.actions}>
               <TouchableOpacity
                 style={[styles.unlockBtn, isUnlocking && styles.unlockBtnDisabled]}
                 onPress={() => { void tryUnlock(); }}
-                disabled={isUnlocking || isPinUnlocking}
+                disabled={isUnlocking || isPasswordUnlocking}
                 activeOpacity={0.85}
               >
                 {isUnlocking ? (
@@ -262,38 +353,24 @@ export function SessionPrivacyGate() {
                   <Text style={styles.unlockText}>Unlock</Text>
                 )}
               </TouchableOpacity>
-
-              {showPinOption ? (
-                <TouchableOpacity
-                  style={[styles.pinBtn, (isUnlocking || isPinUnlocking) && styles.unlockBtnDisabled]}
-                  onPress={handleOpenPinUnlock}
-                  disabled={isUnlocking || isPinUnlocking}
-                  activeOpacity={0.85}
-                >
-                  <Text style={styles.pinText}>Use PIN</Text>
-                </TouchableOpacity>
-              ) : null}
             </View>
-          ) : null}
+            {unlockError ? <Text style={styles.error}>{unlockError}</Text> : null}
+          </>
+        ) : null}
 
-          {unlockError ? <Text style={styles.error}>{unlockError}</Text> : null}
-        </View>
+        {needsUnlock ? (
+          <TouchableOpacity
+            style={styles.signInOptionsBtn}
+            onPress={handleSignInOptions}
+            disabled={isUnlocking || isPasswordUnlocking}
+            activeOpacity={0.7}
+            hitSlop={{ top: 12, bottom: 12, left: 16, right: 16 }}
+          >
+            <Text style={styles.signInOptionsText}>Sign-in options</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
-
-      <PinEntryModal
-        visible={showPinModal}
-        title="Unlock with PIN"
-        subtitle="Enter your 4-digit account PIN to continue"
-        error={pinModalError}
-        isLoading={isPinUnlocking}
-        locked={pinLocked}
-        onCancel={() => {
-          setShowPinModal(false);
-          setPinModalError(null);
-        }}
-        onSubmit={(pin) => { void handlePinUnlock(pin); }}
-      />
-    </>
+    </View>
   );
 }
 
@@ -335,6 +412,55 @@ const styles = StyleSheet.create({
     gap: Spacing[3],
     alignItems: 'center',
   },
+  passwordPanel: {
+    width: '100%',
+    maxWidth: 300,
+    alignItems: 'center',
+  },
+  lockIcon: {
+    fontSize: 36,
+    marginBottom: Spacing[4],
+  },
+  passwordTitle: {
+    fontSize: FontSize.xl,
+    fontWeight: '600',
+    color: Colors.white,
+    marginBottom: Spacing[2],
+    textAlign: 'center',
+  },
+  passwordHint: {
+    fontSize: FontSize.sm,
+    color: 'rgba(255,255,255,0.7)',
+    marginBottom: Spacing[4],
+  },
+  passwordRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
+    borderRadius: Radius.md,
+    marginBottom: Spacing[3],
+    paddingRight: Spacing[3],
+  },
+  passwordRowError: {
+    borderColor: Colors.dangerLight,
+  },
+  passwordInput: {
+    flex: 1,
+    fontSize: FontSize.base,
+    fontWeight: '600',
+    color: Colors.white,
+    paddingVertical: Spacing[4],
+    paddingHorizontal: Spacing[4],
+  },
+  eyeBtn: {
+    padding: 4,
+  },
+  eyeIcon: {
+    fontSize: 16,
+  },
   unlockBtn: {
     backgroundColor: Colors.yellow,
     borderRadius: Radius.lg,
@@ -343,6 +469,7 @@ const styles = StyleSheet.create({
     minWidth: 160,
     width: '100%',
     alignItems: 'center',
+    marginTop: Spacing[2],
   },
   unlockBtnDisabled: { opacity: 0.65 },
   unlockText: {
@@ -350,24 +477,19 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: Colors.navy,
   },
-  pinBtn: {
-    borderWidth: 1.5,
-    borderColor: Colors.glass.borderStrong,
-    borderRadius: Radius.lg,
-    paddingHorizontal: Spacing[8],
-    paddingVertical: Spacing[4],
-    minWidth: 160,
-    width: '100%',
-    alignItems: 'center',
-    backgroundColor: Colors.glass.bg,
+  signInOptionsBtn: {
+    marginTop: Spacing[8],
+    paddingVertical: Spacing[2],
   },
-  pinText: {
+  signInOptionsText: {
     fontSize: FontSize.base,
-    fontWeight: '700',
-    color: Colors.white,
+    color: 'rgba(255,255,255,0.9)',
+    fontWeight: '500',
+    textDecorationLine: 'underline',
   },
   error: {
-    marginTop: Spacing[4],
+    marginTop: Spacing[2],
+    marginBottom: Spacing[2],
     color: Colors.dangerLight,
     fontSize: FontSize.sm,
     textAlign: 'center',
