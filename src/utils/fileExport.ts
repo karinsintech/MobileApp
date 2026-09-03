@@ -1,6 +1,9 @@
 /**
  * Saves binary API export responses directly to the device Downloads folder.
- * No share sheet — Android uses MediaStore Downloads; iOS uses Documents.
+ * Android uses the NativeFileDownload TurboModule (MediaStore); iOS uses Documents.
+ *
+ * On RN 0.86 bridgeless, legacy NativeModules.FileDownload is not callable
+ * ("undefined is not a function") — TurboModuleRegistry is required.
  *
  * RN axios may return ArrayBuffer, Uint8Array, number[], or a string
  * (binary or base64) for `responseType: 'arraybuffer'` — normalize all.
@@ -8,29 +11,27 @@
 
 /* eslint-disable no-bitwise */
 
-import { Platform } from 'react-native';
+import { PermissionsAndroid, Platform } from 'react-native';
 import RNFS from 'react-native-fs';
+import NativeFileDownload from '../../specs/NativeFileDownload';
 
 const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
-const EXPORT_DIR = `${RNFS.DocumentDirectoryPath}/exports`;
+/** Leftover private-sandbox exports from older share-sheet builds (not public Downloads). */
+const LEGACY_EXPORT_DIR = `${RNFS.DocumentDirectoryPath}/exports`;
 const EXPORT_RETENTION_DAYS = 7;
 
-async function ensureExportDirectory(): Promise<void> {
-  if (!(await RNFS.exists(EXPORT_DIR))) {
-    await RNFS.mkdir(EXPORT_DIR);
-  }
-}
-
+/**
+ * Deletes aged files under the old app-private exports folder.
+ * Current downloads go to MediaStore Downloads; this only cleans pre-migration leftovers.
+ */
 export async function purgeOldExports(): Promise<void> {
-  if (!(await RNFS.exists(EXPORT_DIR))) {
+  if (!(await RNFS.exists(LEGACY_EXPORT_DIR))) {
     return;
   }
 
-  const cutoff =
-    Date.now() - EXPORT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
-
-  const files = await RNFS.readDir(EXPORT_DIR);
+  const cutoff = Date.now() - EXPORT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const files = await RNFS.readDir(LEGACY_EXPORT_DIR);
 
   await Promise.all(
     files
@@ -167,7 +168,24 @@ async function writeFileOverwrite(path: string, base64: string): Promise<void> {
   await RNFS.writeFile(path, base64, 'base64');
 }
 
+/** Pre-Android 10 still needs WRITE_EXTERNAL_STORAGE for public Downloads. */
+async function ensureLegacyWritePermission(): Promise<void> {
+  if (Platform.OS !== 'android' || Platform.Version >= 29) return;
 
+  const permission = PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE;
+  const hasPermission = await PermissionsAndroid.check(permission);
+  if (hasPermission) return;
+
+  const result = await PermissionsAndroid.request(permission, {
+    title: 'Storage permission',
+    message: 'Allow KarinsFleet to save Excel/PDF files to Downloads.',
+    buttonPositive: 'Allow',
+    buttonNegative: 'Deny',
+  });
+  if (result !== PermissionsAndroid.RESULTS.GRANTED) {
+    throw new Error('Storage permission is required to save the file.');
+  }
+}
 
 /**
  * Writes export bytes straight to Downloads (Android) or Documents (iOS).
@@ -181,13 +199,32 @@ export async function downloadBinaryFile(
   const base64 = toBase64(data);
   const safeName = uniqueExportFilename(filename);
 
-  await ensureExportDirectory();
+  if (Platform.OS === 'android') {
+    await ensureLegacyWritePermission();
 
-  const path = `${EXPORT_DIR}/${safeName}`;
+    // TurboModule MediaStore path — real Downloads entry (RN 0.86 bridgeless).
+    if (typeof NativeFileDownload?.saveToDownloads === 'function') {
+      return NativeFileDownload.saveToDownloads(base64, safeName, mimeType);
+    }
 
+    // Fallback if the native module is missing from an old build.
+    if (!RNFS.DownloadDirectoryPath) {
+      throw new Error('Downloads folder is unavailable on this device.');
+    }
+    const downloadPath = `${RNFS.DownloadDirectoryPath}/${safeName}`;
+    await writeFileOverwrite(downloadPath, base64);
+    try {
+      await RNFS.scanFile(downloadPath);
+    } catch {
+      // File may still appear after a short delay.
+    }
+    return `Downloads/${safeName}`;
+  }
+
+  // iOS: app Documents is the user-visible Files location for this app.
+  const path = `${RNFS.DocumentDirectoryPath}/${safeName}`;
   await writeFileOverwrite(path, base64);
-
-  return path;
+  return `Files/${safeName}`;
 }
 
 /** Guess image MIME from the URL / filename so MediaStore indexes Downloads correctly. */
@@ -209,13 +246,10 @@ export async function downloadRemoteUrlToDownloads(
   filename: string,
 ): Promise<string> {
   const safeName =
-    filename.replace(/[^\w\.-]/g, '_') ||
+    filename.replace(/[^\w.-]/g, '_') ||
     `notification_${Date.now()}.jpg`;
-
   const mimeType = guessImageMimeType(filename || url);
-
-  const tempPath =
-    `${RNFS.CachesDirectoryPath}/${Date.now()}_${safeName}`;
+  const tempPath = `${RNFS.CachesDirectoryPath}/${Date.now()}_${safeName}`;
 
   const result = await RNFS.downloadFile({
     fromUrl: url,
@@ -228,24 +262,36 @@ export async function downloadRemoteUrlToDownloads(
     } catch {
       // Temp cleanup is best-effort
     }
-
     throw new Error(`Download failed (${result.statusCode})`);
   }
 
   try {
     const base64 = await RNFS.readFile(tempPath, 'base64');
-
     if (!base64) {
       throw new Error('Downloaded image was empty.');
     }
 
-    await ensureExportDirectory();
+    if (Platform.OS === 'android') {
+      await ensureLegacyWritePermission();
+      if (typeof NativeFileDownload?.saveToDownloads === 'function') {
+        return NativeFileDownload.saveToDownloads(base64, safeName, mimeType);
+      }
+      if (!RNFS.DownloadDirectoryPath) {
+        throw new Error('Downloads folder is unavailable on this device.');
+      }
+      const downloadPath = `${RNFS.DownloadDirectoryPath}/${safeName}`;
+      await writeFileOverwrite(downloadPath, base64);
+      try {
+        await RNFS.scanFile(downloadPath);
+      } catch {
+        // File may still appear after a short delay.
+      }
+      return `Downloads/${safeName}`;
+    }
 
-    const path = `${EXPORT_DIR}/${safeName}`;
-
+    const path = `${RNFS.DocumentDirectoryPath}/${safeName}`;
     await writeFileOverwrite(path, base64);
-
-    return path;
+    return `Files/${safeName}`;
   } finally {
     try {
       if (await RNFS.exists(tempPath)) {

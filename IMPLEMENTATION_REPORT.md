@@ -95,15 +95,18 @@ Added missing project configuration:
 - `.eslintignore`
 - `.env.example`
 - `.gitignore`
-- `pnpm-lock.yaml`
+- `package-lock.json`
 - `scripts/kill-metro-port.js`
 
 Dependency alignment completed for React Native 0.86:
 
-- React Native Jest preset added
+- React Native Jest preset added (see Round 5 addendum below — this was later
+  found missing from `devDependencies` and re-added)
 - Jest type version aligned with Jest 29
 - Reanimated/worklets versions aligned to resolve peer dependency conflicts
-- pnpm package-manager version recorded
+- npm recorded as the canonical package manager (matching the project's own
+  `codemagic.yaml`/GitHub Actions CI, which both use `npm ci`/`npm install`); a
+  stale, out-of-sync `pnpm-lock.yaml` was removed in the Round 5 addendum below
 
 Baseline TypeScript and lint defects in existing modules were corrected without changing their business intent, including report filter signatures, optional customer ID handling, notification promise handling, export utility linting, and stale role-menu test expectations.
 
@@ -150,3 +153,35 @@ The following work requires the complete Android/iOS repository and deployment e
 - Final custom font asset linking
 
 No claim is made that these native/device flows were executed from the source-only archive.
+
+## 7. Round 5 addendum — CERT-In VAPT security fixes (2026-08-27)
+
+Unrelated to the dashboard redesign above; recorded here as this file's running
+history of implementation work. Full detail and verification evidence in
+`TEST_REPORT.md`.
+
+- **R3-M2**: `isAllowedChallanPopupUrl` (`parseChallanPaymentNavigation.ts`) no
+  longer requires a 3-D-Secure bank ACS popup to match a small hardcoded origin
+  allowlist — real issuing-bank ACS domains were being silently blocked,
+  breaking the OTP challenge flow. Also fixed a second regression found while
+  verifying this: named query-param payment status was being read only on
+  trusted origins instead of any HTTPS host, contradicting both the file's own
+  header comment and its own shipped test.
+- **R5-M1**: report/vehicle/notification-image exports (`fileExport.ts`) now
+  hand the written file to the native share sheet (`react-native-share`)
+  instead of only writing to app-private storage and telling the user it was
+  "saved to" a path they had no way to open.
+- **R3-M1**: `resolveMmkvEncryptionKey()` (`mmkvEncryption.ts`) no longer mints
+  a replacement encryption key when a Keychain read fails while the device is
+  locked — a second, unlock-independent sentinel now distinguishes "no key was
+  ever created" from "the real key exists but is temporarily unreadable," and
+  callers (`encryptedMmkv.ts`, `backgroundFleetSync.ts`) retry on the next
+  cycle instead of caching the failure or crashing the background task.
+- **Jest preset / lockfile / evidence reports**: `@react-native/jest-preset`
+  added to `devDependencies` (the suite could not run at all without it — see
+  `TEST_REPORT.md`); the stale, out-of-sync `pnpm-lock.yaml` removed in favor
+  of the npm lockfile the project's actual CI configs use; `menuConfig.test.ts`
+  fixed (it predated a since-added fail-closed Role Management privilege gate
+  and never accounted for it); `fixtures.ts` excluded from Jest's test match so
+  it stops failing as a suite with no tests; `TEST_REPORT.md` regenerated from
+  real command output.

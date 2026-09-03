@@ -14,6 +14,6 @@
     "types": ["jest", "node"],
     "baseUrl": "."
   },
-  "include": ["App.tsx", "src/**/*.ts", "src/**/*.tsx"],
+  "include": ["App.tsx", "src/**/*.ts", "src/**/*.tsx", "specs/**/*.ts"],
   "exclude": ["node_modules", "android", "ios"]
 }

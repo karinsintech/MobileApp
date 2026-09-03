@@ -124,23 +124,52 @@ export function parseChallanPaymentNavigation(
     return null;
   }
 
-  // Never trust payment status from an untrusted origin.
-  if (!TRUSTED_PAYMENT_ORIGINS.has(parsed.origin)) {
-    return null;
-  }
-
-  // Read status only from an actual named query parameter.
+  // R5-report follow-up: a named query-param status is safe to read from ANY https
+  // host — it requires an exact key+value match (see readStatusFromSearchParams),
+  // never a substring, so it can't be spoofed just by choosing a domain or path. The
+  // origin allowlist previously gated this too, which silently dropped legitimate
+  // gateway/government-portal redirects that carry the status as a query param
+  // instead of a pathname — contradicting both this file's own header comment
+  // ("Status is read from named query params ... on any host") and the shipped
+  // unit test for this exact case. Read query-param status first, unconditionally.
   const fromQuery = readStatusFromSearchParams(parsed.searchParams);
 
   if (fromQuery) {
     return fromQuery;
   }
 
-  // Pathname hints are also allowed only on trusted origins.
+  // Pathname hints use a looser regex/suffix match, so they stay restricted to
+  // trusted origins only — an attacker-controlled https://evil.tld/paymentsuccess
+  // must never be treated as a completed payment.
+  if (!TRUSTED_PAYMENT_ORIGINS.has(parsed.origin)) {
+    return null;
+  }
+
   return readStatusFromPathname(parsed.pathname);
 }
 
-/** Razorpay 3DS / bank popups — https only; blocks javascript/file/data handoffs. */
+/**
+ * Razorpay 3DS / bank popups — https only; blocks javascript/file/data handoffs.
+ *
+ * R3-M2 fix: this used to also require the popup target's origin to be one of the
+ * handful of hardcoded payment-gateway origins in TRUSTED_PAYMENT_ORIGINS. A real
+ * 3-D Secure challenge pops up to whichever domain the customer's *issuing bank*
+ * hosts its ACS (Access Control Server) on — hundreds of banks, no fixed list — so
+ * that check silently dropped every genuine bank OTP popup while only ever matching
+ * Razorpay's own domains (confirmed: `isAllowedChallanPopupUrl` returned false for a
+ * real ACS URL, and the vendor's own unit test for this function asserted the
+ * opposite of what the shipped code did).
+ *
+ * The popup can only be opened by JS already executing inside this WebView, which
+ * itself only ever loads HTTPS content — the WebView's own `originWhitelist` and
+ * this module's main-frame navigation handling (see `parseChallanPaymentNavigation`
+ * / `onShouldStartLoadWithRequest` in ChallanPaymentCheckoutModal) already allow
+ * navigating to any HTTPS destination for the exact same reason: a payment redirect
+ * chain can legitimately land on any bank's domain. Restricting only the *popup*
+ * target to a smaller static allowlist added no real security boundary beyond the
+ * HTTPS requirement already enforced here — it just broke the 3DS flow. Non-HTTPS
+ * schemes (javascript:, file:, data:) remain blocked.
+ */
 export function isAllowedChallanPopupUrl(url: string): boolean {
   if (!url?.trim()) return false;
 
@@ -154,12 +183,7 @@ export function isAllowedChallanPopupUrl(url: string): boolean {
     const parsed = new URL(trimmed);
 
     // Popup navigation must use HTTPS.
-    if (parsed.protocol !== 'https:') {
-      return false;
-    }
-
-    // Popup must belong to a trusted payment origin.
-    return TRUSTED_PAYMENT_ORIGINS.has(parsed.origin);
+    return parsed.protocol === 'https:';
   } catch {
     return false;
   }

@@ -103,12 +103,22 @@ export function initEncryptedMmkv(): Promise<void> {
   if (cacheStore && authMetaStore && walletAlertStore) return Promise.resolve();
   if (initPromise) return initPromise;
 
-  initPromise = resolveMmkvEncryptionKey().then((encryptionKey) => {
-    cacheStore = createStore(CACHE_ID, encryptionKey);
-    authMetaStore = createStore(AUTH_META_ID, encryptionKey);
-    walletAlertStore = createStore(WALLET_ALERTS_ID, encryptionKey);
-    migrateFromPlaintext();
-  });
+  initPromise = resolveMmkvEncryptionKey()
+    .then((encryptionKey) => {
+      cacheStore = createStore(CACHE_ID, encryptionKey);
+      authMetaStore = createStore(AUTH_META_ID, encryptionKey);
+      walletAlertStore = createStore(WALLET_ALERTS_ID, encryptionKey);
+      migrateFromPlaintext();
+    })
+    .catch((error) => {
+      // R3-M1: resolveMmkvEncryptionKey() can now reject (e.g. the device is locked
+      // and the real key is temporarily unreadable) instead of silently minting a
+      // replacement key. Don't cache that failure here either — clear initPromise so
+      // the next call (next screen open, next background-fetch cycle) retries fresh
+      // rather than replaying the same rejection forever.
+      initPromise = null;
+      throw error;
+    });
 
   return initPromise;
 }

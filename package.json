@@ -45,6 +45,7 @@
     "react-native-reanimated": "^4.4.0",
     "react-native-safe-area-context": "^5.8.0",
     "react-native-screens": "^4.25.2",
+    "react-native-share": "^12.3.1",
     "react-native-svg": "^15.6.0",
     "react-native-vector-icons": "^10.2.0",
     "react-native-webview": "^14.0.1",
@@ -60,6 +61,7 @@
     "@react-native-community/cli": "^20.2.0",
     "@react-native/babel-preset": "0.86.0",
     "@react-native/eslint-config": "0.86.0",
+    "@react-native/jest-preset": "0.86.0",
     "@react-native/metro-config": "0.86.0",
     "@react-native/typescript-config": "0.86.0",
     "@types/jest": "^30.0.0",
@@ -73,7 +75,7 @@
     "typescript": "5.9.3"
   },
   "jest": {
-    "preset": "react-native",
+    "preset": "@react-native/jest-preset",
     "moduleFileExtensions": [
       "ts",
       "tsx",
@@ -81,6 +83,18 @@
       "jsx",
       "json",
       "node"
+    ],
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "<rootDir>/src/__tests__/fixtures.ts"
     ]
+  },
+  "codegenConfig": {
+    "name": "NativeFileDownloadSpec",
+    "type": "modules",
+    "jsSrcsDir": "specs",
+    "android": {
+      "javaPackageName": "com.karins"
+    }
   }
 }

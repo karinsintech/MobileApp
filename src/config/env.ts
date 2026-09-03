@@ -50,7 +50,10 @@ function readEnvFlag(name: string, defaultValue: boolean): boolean {
  * Default: ON in release, OFF in __DEV__ (emulators often trip heuristics).
  * Override with KARINS_BLOCK_ON_ROOT=true|false at build time.
  */
-export const BLOCK_ON_ROOT: boolean = readEnvFlag("KARINS_BLOCK_ON_ROOT", !IS_DEV);
+export const BLOCK_ON_ROOT: boolean = readEnvFlag(
+  "KARINS_BLOCK_ON_ROOT",
+  !IS_DEV,
+);
 
 // Production (live cron / FCM): https://api.karins.in/api
 // Test API only: https://testapi.karins.in/api

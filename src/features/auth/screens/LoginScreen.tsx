@@ -86,26 +86,6 @@ export default function LoginScreen({ navigation }: Props) {
     setShowPinModal(true);
   };
 
-  const handleForgetThisDevice = () => {
-    Alert.alert(
-      'Forget this device',
-      'Removes saved PIN login, device id, and local preferences from this handset.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Forget',
-          style: 'destructive',
-          onPress: async () => {
-            await SecureStorage.forgetThisDevice();
-            setMobileNo('');
-            setPassword('');
-            refreshPinIdentity();
-          },
-        },
-      ],
-    );
-  };
-
   const handlePinSignIn = async (pin: string) => {
     setPinModalError(null);
     const result = await dispatch(signInWithPin({
@@ -145,11 +125,11 @@ export default function LoginScreen({ navigation }: Props) {
             <Text style={styles.heading}>Sign In</Text>
             <Text style={styles.subheading}>Access your fleet command center</Text>
 
-            {pinLoginReady && pinMobileHint ? (
+            {/* {pinLoginReady && pinMobileHint ? (
               <Text style={styles.pinHint}>
                 PIN login saved for +91 {pinMobileHint} — enter the full number below
               </Text>
-            ) : null}
+            ) : null} */}
 
             <View style={styles.inputWrapper}>
               <View style={styles.flagRow}>
@@ -226,17 +206,6 @@ export default function LoginScreen({ navigation }: Props) {
               <Text style={styles.pinIcon}>🔢</Text>
               <Text style={styles.pinText}>Sign in with PIN</Text>
             </TouchableOpacity>
-
-            {pinLoginReady ? (
-              <TouchableOpacity
-                style={styles.forgetDeviceBtn}
-                onPress={handleForgetThisDevice}
-                disabled={isLoading}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.forgetDeviceText}>Forget this device</Text>
-              </TouchableOpacity>
-            ) : null}
           </GlassCard>
 
           <TouchableOpacity
@@ -317,8 +286,6 @@ const styles = StyleSheet.create({
     marginBottom: Spacing[3],
     lineHeight: 18,
   },
-  forgetDeviceBtn: { alignSelf: 'center', marginTop: Spacing[4], paddingVertical: 4 },
-  forgetDeviceText: { fontSize: FontSize.sm, color: Colors.dangerLight, fontWeight: '600' },
   securityNote: { textAlign: 'center', fontSize: FontSize.xs, color: 'rgba(255,255,255,0.78)', letterSpacing: 0.5, marginTop: Spacing[4] },
   demoLink:     { alignSelf: 'center', marginTop: Spacing[4] },
   demoLinkText: { fontSize: FontSize.base, color: Colors.text.subtle, fontWeight: '500' },

@@ -7,7 +7,7 @@ import com.facebook.react.module.model.ReactModuleInfo
 import com.facebook.react.module.model.ReactModuleInfoProvider
 import com.facebook.react.uimanager.ViewManager
 
-/** Registers the MediaStore Downloads bridge for silent file exports. */
+/** Registers the MediaStore Downloads TurboModule for silent file exports. */
 class FileDownloadPackage : BaseReactPackage() {
   override fun getModule(name: String, reactContext: ReactApplicationContext): NativeModule? {
     return if (name == FileDownloadModule.NAME) {
@@ -22,11 +22,11 @@ class FileDownloadPackage : BaseReactPackage() {
       mapOf(
         FileDownloadModule.NAME to ReactModuleInfo(
           FileDownloadModule.NAME,
-          FileDownloadModule.NAME,
-          false,
-          false,
-          false,
-          false,
+          FileDownloadModule::class.java.name,
+          false, // canOverrideExistingModule
+          false, // needsEagerInit
+          false, // isCxxModule
+          true, // isTurboModule — required for RN 0.86 bridgeless
         ),
       )
     }

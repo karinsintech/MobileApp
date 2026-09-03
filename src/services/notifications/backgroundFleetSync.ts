@@ -32,7 +32,18 @@ function buildDashboardCacheKey(userId?: number, customerId?: number): string {
  * No-ops when there is no restorable session or the network call fails.
  */
 export async function runBackgroundFleetSync(): Promise<void> {
-  await initEncryptedMmkv();
+  try {
+    await initEncryptedMmkv();
+  } catch (error) {
+    // R3-M1: the encrypted MMKV key can be temporarily unreadable (most commonly:
+    // the device is locked, and the real key needs WHEN_UNLOCKED_THIS_DEVICE_ONLY
+    // access). Skip this sync cycle rather than proceeding without a store — the
+    // next scheduled background fetch retries once the device has unlocked again.
+    if (__DEV__) {
+      console.warn('[BackgroundFleetSync] encrypted MMKV unavailable, skipping cycle', error);
+    }
+    return;
+  }
   const token = await SecureStorage.getAccessToken();
   if (!token || !SecureStorage.isSessionRestorable()) return;
 

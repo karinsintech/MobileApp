@@ -1,0 +1,52 @@
+name: Mobile CI
+
+# Task #29 / R5 report: stop-gap CI gate so every push and PR gets a reproducible
+# install, a type-check, and the JS test suite run automatically — closing the gap
+# the R5 report flagged (the shipped test suite couldn't even run out of the box;
+# @react-native/jest-preset was missing from devDependencies). This is deliberately
+# JS-only and fast: it needs no Android SDK, Xcode, or signing secrets, unlike the
+# existing native iOS release build in objective-c-xcode.yml.
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies (reproducible install from committed lockfile)
+        run: npm ci
+
+      # Both informational only, not merge gates: 16 pre-existing TypeScript errors
+      # and 50 pre-existing ESLint problems predate this security-fix round (see
+      # TEST_REPORT.md) — failing CI on either would make every future PR red for
+      # reasons unrelated to that PR's own change. Surfacing them here keeps them
+      # visible; tightening either to a hard gate is a good follow-up once the
+      # existing backlog is triaged down.
+      - name: Type-check (informational — does not fail the build)
+        continue-on-error: true
+        run: npm run type-check
+
+      - name: Lint (informational — does not fail the build)
+        continue-on-error: true
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Dependency vulnerability audit (informational — does not fail the build)
+        continue-on-error: true
+        run: npm audit

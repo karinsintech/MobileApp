@@ -11,16 +11,21 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.module.annotations.ReactModule
+import com.facebook.react.turbomodule.core.interfaces.TurboModule
 import java.io.File
 import java.io.FileOutputStream
 
 /**
  * Saves export bytes into the public Downloads collection so the user gets a
  * real download (visible in Files / Downloads) — not a share sheet.
+ *
+ * Implements TurboModule so RN 0.86 bridgeless can invoke saveToDownloads via
+ * TurboModuleRegistry; legacy NativeModules.FileDownload is no longer callable.
  */
 @ReactModule(name = FileDownloadModule.NAME)
 class FileDownloadModule(reactContext: ReactApplicationContext) :
-  ReactContextBaseJavaModule(reactContext) {
+  ReactContextBaseJavaModule(reactContext),
+  TurboModule {
 
   override fun getName(): String = NAME
 
@@ -108,6 +113,6 @@ class FileDownloadModule(reactContext: ReactApplicationContext) :
   }
 
   companion object {
-    const val NAME = "FileDownload"
+    const val NAME = "NativeFileDownload"
   }
 }

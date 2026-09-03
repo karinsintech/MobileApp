@@ -41,8 +41,6 @@ jobs:
           p12-file-base64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
           p12-password: ${{ secrets.P12_PASSWORD }}
 
-      - name: Install provisioning profile and resolve identity
-        env:
       - name: Import signing assets
         env:
           BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}

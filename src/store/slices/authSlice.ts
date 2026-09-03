@@ -87,11 +87,13 @@ async function persistSession(
   } catch {
     // Best-effort — logout still resolves hardware id at sign-out time.
   }
+  // Fresh password/PIN login must never touch biometry Keychain or inherit a
+  // stale idle lock — unlock is only for post-login idle, not sign-in itself.
   try {
-    const { ensureSessionUnlockGate } = await import('../../services/session/sessionPrivacy');
-    await ensureSessionUnlockGate();
+    const { clearSessionLeftAt } = await import('../../services/session/sessionPrivacy');
+    clearSessionLeftAt();
   } catch {
-    // Biometry gate is optional on emulators without a device passcode.
+    // ignore
   }
 }
 
@@ -235,12 +237,8 @@ export const restoreSession = createAsyncThunk<
     }
 
     markApiSessionActive();
-    try {
-      const { ensureSessionUnlockGate } = await import('../../services/session/sessionPrivacy');
-      await ensureSessionUnlockGate();
-    } catch {
-      // Biometry gate optional when the device has no enrolled biometrics/passcode.
-    }
+    // Do not enroll/rewrite the unlock gate on cold restore — that was prompting
+    // fingerprint on every open. Gate setup stays on sign-in / SessionPrivacyGate.
     return { user };
   },
 );
