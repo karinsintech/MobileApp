@@ -19,6 +19,8 @@ import ProfileScreen from '../features/profile/screens/ProfileScreen';
 import ChangePasswordScreen from '../features/profile/screens/ChangePasswordScreen';
 import SetPinScreen from '../features/profile/screens/SetPinScreen';
 import ChangePinScreen from '../features/profile/screens/ChangePinScreen';
+import SetAppLockPinScreen from '../features/profile/screens/SetAppLockPinScreen';
+import ChangeAppLockPinScreen from '../features/profile/screens/ChangeAppLockPinScreen';
 import LowBalanceThresholdScreen from '../features/profile/screens/LowBalanceThresholdScreen';
 import { ErrorBoundary } from '../components';
 
@@ -204,6 +206,8 @@ function MoreNavigator() {
         <MoreStack.Screen name="ChangePassword" component={ChangePasswordScreen} />
         <MoreStack.Screen name="SetPin" component={SetPinScreen} />
         <MoreStack.Screen name="ChangePin" component={ChangePinScreen} />
+        <MoreStack.Screen name="SetAppLockPin" component={SetAppLockPinScreen} />
+        <MoreStack.Screen name="ChangeAppLockPin" component={ChangeAppLockPinScreen} />
         <MoreStack.Screen name="LowBalanceThreshold" component={LowBalanceThresholdScreen} />
         <MoreStack.Screen name="Reports"       component={GuardedReportsScreen} />
         <MoreStack.Screen name="VehicleTollSummary" component={VehicleTollSummaryScreen} />

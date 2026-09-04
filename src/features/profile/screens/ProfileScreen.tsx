@@ -13,6 +13,7 @@ import {
   enablePinLogin,
   fetchPinStatus,
 } from '../../../services/auth/pinAuthService';
+import { hasAppLockPin } from '../../../services/auth/appLockPinService';
 import { profileApi } from '../../../services/api/profileApi';
 import { LiquidBackground, GlassCard, ScreenHeader } from '../../../components';
 import { Colors, FontSize, Spacing, Radius } from '../../../theme';
@@ -94,6 +95,7 @@ export default function ProfileScreen() {
 
   const [pinLoginEnabled, setPinLoginEnabled] = useState(false);
   const [hasPinSet, setHasPinSet] = useState(false);
+  const [hasAppLock, setHasAppLock] = useState(false);
   const [pinBusy, setPinBusy] = useState(false);
   const [notifPrefs, setNotifPrefs] = useState(loadNotificationPreferences());
   const [lowBalanceThresholdLabel, setLowBalanceThresholdLabel] = useState('—');
@@ -175,6 +177,7 @@ export default function ProfileScreen() {
   const loadPinPrefs = useCallback(async () => {
     try {
       setPinLoginEnabled(SecureStorage.isPinLoginEnabled());
+      setHasAppLock(hasAppLockPin());
       if (accountMobile.length === 10) {
         const pinSet = await fetchPinStatus(accountMobile);
         setHasPinSet(pinSet);
@@ -184,6 +187,7 @@ export default function ProfileScreen() {
     } catch {
       setPinLoginEnabled(false);
       setHasPinSet(false);
+      setHasAppLock(hasAppLockPin());
     }
   }, [accountMobile]);
 
@@ -316,6 +320,12 @@ export default function ProfileScreen() {
 
         <Text style={styles.sectionLabel}>SECURITY</Text>
         <GlassCard style={styles.section}>
+          <SettingRow
+            icon="🔒"
+            label={hasAppLock ? 'Change App Lock PIN' : 'Set App Lock PIN'}
+            onPress={() => nav.navigate(hasAppLock ? 'ChangeAppLockPin' : 'SetAppLockPin')}
+          />
+          <View style={styles.divider} />
           <SettingRow
             icon="🔢"
             label={hasPinSet ? 'Change PIN' : 'Set PIN'}

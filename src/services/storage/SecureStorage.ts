@@ -311,6 +311,12 @@ export const SecureStorage = {
     const pinHint = pinLoginEnabled
       ? cache().getString(PIN_LOGIN_MOBILE_HINT_KEY)
       : null;
+    // App lock PIN is device-local and independent of account PIN — keep across
+    // normal logout; wipe only on Forget this device.
+    const APP_LOCK_PIN_HASH_KEY = 'app_lock_pin_hash';
+    const appLockPinHash = !forgetDevice
+      ? cache().getString(APP_LOCK_PIN_HASH_KEY)
+      : null;
 
     await SecureStorage.clearSession();
     await SecureStorage.clearDeviceId();
@@ -331,6 +337,9 @@ export const SecureStorage = {
       SecureStorage.setPinLoginEnabled(true);
       cache().set(PIN_LOGIN_MOBILE_HASH_KEY, pinHash);
       cache().set(PIN_LOGIN_MOBILE_HINT_KEY, pinHint);
+    }
+    if (appLockPinHash) {
+      cache().set(APP_LOCK_PIN_HASH_KEY, appLockPinHash);
     }
 
     try {

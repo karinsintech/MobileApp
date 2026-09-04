@@ -102,6 +102,8 @@ export type MoreStackParamList = {
   ChangePassword:    undefined;
   SetPin:            undefined;
   ChangePin:         undefined;
+  SetAppLockPin:     undefined;
+  ChangeAppLockPin:  undefined;
   LowBalanceThreshold: undefined;
   Notifications:     { title?: string } | undefined;
   TagInventory:      undefined;

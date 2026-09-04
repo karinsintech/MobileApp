@@ -6,6 +6,9 @@
  *
  * Opaque overlay on AppState "inactive" still covers the iOS app-switcher
  * snapshot; that cover dismisses on resume unless the idle window elapsed.
+ *
+ * Biometry ACL is biometry-only (no device passcode fallback) so idle unlock
+ * never offers the phone lock password — alternatives are app-lock PIN only.
  */
 
 import * as Keychain from 'react-native-keychain';
@@ -18,13 +21,13 @@ export const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const SESSION_LEFT_AT_KEY = 'session_privacy_left_at';
 
 /**
- * Challenge service used only when the user taps Unlock after idle.
+ * Challenge service used only for an explicit post-idle biometric prompt.
  * Never created/reset during login — ACL writes on Android can prompt biometrics.
  */
 const UNLOCK_CHALLENGE_SERVICE = 'com.karins.fleet.session-unlock-challenge';
 
-const ACCESS_CONTROL =
-  Keychain.ACCESS_CONTROL.BIOMETRY_CURRENT_SET_OR_DEVICE_PASSCODE;
+/** Biometry only — never fall back to the phone lock / device passcode. */
+const ACCESS_CONTROL = Keychain.ACCESS_CONTROL.BIOMETRY_CURRENT_SET;
 
 const AUTH_PROMPT = {
   title: 'Unlock Karins Fleet',
@@ -80,7 +83,7 @@ export async function clearSessionUnlockGate(): Promise<void> {
 }
 
 /**
- * Prompts biometrics only after an explicit Unlock tap (post-idle).
+ * Prompts biometrics after idle lock (auto or via App lock).
  * Never called from sign-in, restore, or app open.
  */
 export async function authenticateSessionUnlock(): Promise<{
@@ -90,14 +93,13 @@ export async function authenticateSessionUnlock(): Promise<{
   try {
     const biometry = await Keychain.getSupportedBiometryType();
 
-    // No enrolled biometrics — Unlock is a confirmation tap; PIN remains optional.
+    // No enrolled biometrics — caller should fall through to app-lock PIN.
     if (!biometry) {
-      clearSessionLeftAt();
-      return { ok: true, reason: 'no_biometry' };
+      return { ok: false, reason: 'no_biometry' };
     }
 
     try {
-      // ACL challenge is created only here (user already chose Unlock after idle).
+      // ACL challenge is created only here (post-idle unlock path).
       await Keychain.setGenericPassword('challenge', `c:${Date.now()}`, {
         service: UNLOCK_CHALLENGE_SERVICE,
         accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
@@ -133,9 +135,8 @@ export async function authenticateSessionUnlock(): Promise<{
         return { ok: false, reason: 'cancelled' };
       }
 
-      // Emulator / ACL unsupported — treat Unlock as confirmed after the tap.
-      clearSessionLeftAt();
-      return { ok: true, reason: 'fallback_gate' };
+      // Emulator / ACL unsupported — treat as cancelled so PIN remains available.
+      return { ok: false, reason: 'fallback_unavailable' };
     }
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Authentication failed';
