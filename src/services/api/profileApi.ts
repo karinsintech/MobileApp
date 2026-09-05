@@ -11,6 +11,9 @@ export interface CustomerProfileRow {
   fundTransferThreshold?: string | number;
   /** Low balance alert limit — same field used by the web settings screen. */
   minimumBalance?: string | number;
+  /** Optional top-level KYC — masked for non-ADMIN when present. */
+  panNumber?: string;
+  gstNo?: string;
   walletDetails?: WalletBankDetails;
   idfcWalletDetails?: WalletBankDetails;
   corporateWalletDetails?: WalletBankDetails;
@@ -25,6 +28,9 @@ export interface WalletBankDetails {
   ifsc?: string;
   upi?: string;
   upiUrl?: string;
+  /** Optional KYC fields — masked for non-ADMIN when present (DPDP RED). */
+  panNumber?: string;
+  gstNo?: string;
 }
 
 export interface AgentProfileRow {

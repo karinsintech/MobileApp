@@ -36,6 +36,7 @@ import {
 import { resolveWalletAlertThreshold } from '../../../services/notifications/walletAlertUtils';
 import { hydrateWalletAlertThresholdFromApi } from '../../../services/notifications/walletAlertPreferences';
 import { formatINR } from '../../../utils/format';
+import { maskBankAccount, redactRedPii } from '../../../utils/piiProtection';
 import type { DashboardSummary } from '../../../types/dashboard';
 import { resolveActiveCustomerId } from '../../../types/auth';
 import {
@@ -120,8 +121,9 @@ export default function ProfileScreen() {
         const { data } = await profileApi.getAgentList();
         const rows = data?.data?.rows ?? [];
         const current = rows.find((r) => r.accNo || r.ifscNo || r.upiNo) ?? rows[0];
+        // Agent settlement AccNo is RED — mask for every non-ADMIN (agents included).
         setAgentWallet({
-          accountNumber: current?.accNo ?? '',
+          accountNumber: redactRedPii(current?.accNo ?? '', user?.roleKey, maskBankAccount),
           ifsc: current?.ifscNo ?? '',
           upiId: current?.upiNo ?? '',
         });
@@ -132,7 +134,7 @@ export default function ProfileScreen() {
         const { data } = await profileApi.getCustomerProfile();
         const row = data?.rows?.[0];
         if (row) {
-          setProfile(mapCustomerProfileRow(row));
+          setProfile(mapCustomerProfileRow(row, user?.roleKey));
         }
       }
     } catch {
@@ -250,6 +252,31 @@ export default function ProfileScreen() {
     ]);
   };
 
+  // MM-07/R6 restore, merged forward into R7: this UI entry point was removed
+  // (again) while SecureStorage.forgetThisDevice() and signOut({forgetDevice:true})
+  // — the underlying, still-fully-functional service and thunk — were left in
+  // place with no caller. Without this, a user signing out on a shared/borrowed
+  // device left their PIN hash/hint (and now also their App Lock PIN hash) behind
+  // for the next person who opens the app on that handset to inherit. Kept in
+  // SECURITY next to the other PIN controls since that's exactly what this wipes.
+  const handleForgetDevice = () => {
+    Alert.alert(
+      'Forget This Device',
+      'This signs you out and removes your saved PIN and app lock PIN from this device. ' +
+        'Anyone else using this device afterwards will need to sign in with mobile number and OTP again.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Forget Device',
+          style: 'destructive',
+          onPress: async () => {
+            await dispatch(signOut({ forgetDevice: true }));
+          },
+        },
+      ],
+    );
+  };
+
   const showCorporate = profile
     ? hasWalletValues(profile.corporateYesBank) || hasWalletValues(profile.corporateIdfc)
     : false;
@@ -268,6 +295,8 @@ export default function ProfileScreen() {
           </View>
           {profile?.email ? <Text style={styles.meta}>{profile.email}</Text> : null}
           {profile?.phone ? <Text style={styles.meta}>{profile.phone}</Text> : null}
+          {profile?.panNumber ? <Text style={styles.meta}>PAN: {profile.panNumber}</Text> : null}
+          {profile?.gstNo ? <Text style={styles.meta}>GSTIN: {profile.gstNo}</Text> : null}
         </GlassCard>
 
         {profile?.address ? (
@@ -344,6 +373,13 @@ export default function ProfileScreen() {
             icon="🔑"
             label="Change Password"
             onPress={() => nav.navigate('ChangePassword')}
+          />
+          <View style={styles.divider} />
+          <SettingRow
+            icon="🚫"
+            label="Forget This Device"
+            onPress={handleForgetDevice}
+            danger
           />
         </GlassCard>
 

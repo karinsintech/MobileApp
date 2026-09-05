@@ -1,6 +1,7 @@
 /**
  * SARATHI licence detail — mirrors the web DrivingLicense eye-icon modal:
- * licence summary, photo, endorsement, validity periods and COV table.
+ * licence summary, endorsement, validity periods and COV table.
+ * Biometric photo is never rendered (DPDP Restricted — stripped client-side).
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -9,11 +10,14 @@ import {
 } from 'react-native';
 import { complianceApi } from '../../../services/api/complianceApi';
 import {
-  LiquidBackground, GlassCard, SkeletonCard, ScreenHeader, AppImage,
+  LiquidBackground, GlassCard, SkeletonCard, ScreenHeader,
 } from '../../../components';
 import { Colors, FontSize, Spacing, Radius } from '../../../theme';
 import { fmtDate } from '../../../utils/format';
+import { maskDlNumber, redactRedPii } from '../../../utils/piiProtection';
+import { useAppSelector } from '../../../store';
 import { resolveDriverFullName } from '../utils/driverNameUtils';
+import { sanitizeDlPayload } from '../utils/sanitizeDlPayload';
 import type { DLDetailPayload } from '../types/dlDetail';
 
 function DetailRow({ label, value }: { label: string; value?: string | null }) {
@@ -43,8 +47,12 @@ export default function DLDetailScreen({ route }: any) {
   const dlId: number = route.params.dlId;
   const passedDetail: DLDetailPayload | undefined = route.params.detail;
   const passedDriverName: string | undefined = route.params.driverName;
+  const { user } = useAppSelector((s) => s.auth);
 
-  const [detail, setDetail] = useState<DLDetailPayload | null>(passedDetail ?? null);
+  // Sanitize any detail that arrived via navigation so biometrics never sit in state.
+  const [detail, setDetail] = useState<DLDetailPayload | null>(
+    passedDetail ? sanitizeDlPayload(passedDetail) : null,
+  );
   const [loading, setLoading] = useState(!passedDetail);
   const [error, setError] = useState(false);
 
@@ -54,7 +62,7 @@ export default function DLDetailScreen({ route }: any) {
     try {
       const { data } = await complianceApi.getDLById(dlId);
       const payload = (data as any)?.result ?? data;
-      if (payload && typeof payload === 'object') setDetail(payload);
+      if (payload && typeof payload === 'object') setDetail(sanitizeDlPayload(payload));
       else setError(true);
     } catch {
       setError(true);
@@ -68,8 +76,8 @@ export default function DLDetailScreen({ route }: any) {
   }, [fetchData, passedDetail]);
 
   const lic = detail?.licenseDetails;
-  const photo = detail?.bioImageDetails?.biPhoto;
   const driverFullName = resolveDriverFullName(detail, passedDriverName);
+  const displayDlNo = redactRedPii(lic?.dlLicno, user?.roleKey, maskDlNumber);
 
   return (
     <LiquidBackground>
@@ -93,7 +101,7 @@ export default function DLDetailScreen({ route }: any) {
             <View style={styles.summaryRow}>
               <View style={styles.summaryCol}>
                 <DetailRow label="DL Status" value={lic?.dlStatus} />
-                <DetailRow label="DL No" value={lic?.dlLicno} />
+                <DetailRow label="DL No" value={displayDlNo} />
                 <DetailRow label="Driver Full Name" value={driverFullName} />
                 <DetailRow label="Issue Date" value={fmtDate(lic?.dlIssuedt)} />
                 <DetailRow
@@ -101,13 +109,6 @@ export default function DLDetailScreen({ route }: any) {
                   value={lic?.omRtoFullname || lic?.olaName}
                 />
               </View>
-              {photo ? (
-                <AppImage
-                  source={{ uri: `data:image/jpeg;base64,${photo}` }}
-                  style={styles.photo}
-                  resizeMode="cover"
-                />
-              ) : null}
             </View>
           </GlassCard>
 
@@ -180,13 +181,6 @@ const styles = StyleSheet.create({
   },
   summaryRow: { flexDirection: 'row', gap: 12 },
   summaryCol: { flex: 1, gap: 8 },
-  photo: {
-    width: 96,
-    height: 120,
-    borderRadius: Radius.sm,
-    borderWidth: 1,
-    borderColor: Colors.glass.border,
-  },
   detailRow: { gap: 2 },
   detailLabel: { fontSize: FontSize.xs, color: Colors.text.label, fontWeight: '600' },
   detailValue: { fontSize: FontSize.sm, color: Colors.white, fontWeight: '600' },

@@ -22,9 +22,11 @@ import { Colors, FontSize, Spacing } from '../../../theme';
 import { fmtDate } from '../../../utils/format';
 import { requiresAdminContextPicker } from '../../../types/auth';
 import { PrivilegeIds } from '../../../types/accessMenus';
+import { maskDlNumber, redactRedPii } from '../../../utils/piiProtection';
 import type { MoreStackParamList } from '../../../navigation/types';
 import DLFilterPanel from '../components/DLFilterPanel';
 import DLCheckStatusModal from '../components/DLCheckStatusModal';
+import { sanitizeDlPayload } from '../utils/sanitizeDlPayload';
 import {
   EMPTY_DL_FILTERS,
   type DLFilters,
@@ -237,11 +239,17 @@ export default function DLListScreen() {
       );
 
       const mapped: DLItem[] = (data.records ?? []).map((row: any, index: number) => {
-        const detail: DLDetailPayload | null = row.fullResponse?.result ?? row.fullResponse ?? null;
+        // Strip Aadhaar/biometrics before they enter list state or navigation params.
+        const rawDetail: DLDetailPayload | null = row.fullResponse?.result ?? row.fullResponse ?? null;
+        const detail = rawDetail ? sanitizeDlPayload(rawDetail) : null;
+        const rawDlNo = (row.dlLicno ?? '—').trim();
         return {
           id: String(row.id ?? row.dlLicno ?? index),
           recordId: Number(row.id) || index,
-          dlNo: (row.dlLicno ?? '—').trim(),
+          // RED-tier: only ADMIN keeps the full licence number on the list card.
+          dlNo: rawDlNo === '—'
+            ? rawDlNo
+            : redactRedPii(rawDlNo, user?.roleKey, maskDlNumber),
           driverName: resolveDriverFullName(detail, row.driverName, row.bioFirstName),
           transportUpto: row.dlTrValdtoDt || null,
           nonTransportUpto: row.dlNtValdtoDt || null,
@@ -257,7 +265,7 @@ export default function DLListScreen() {
       setExpiryCounts(data.expiryCounts ?? null);
     } catch { /* empty state */ }
     finally { setLoading(false); setRefreshing(false); }
-  }, [canScopeByCustomerId, customerId]);
+  }, [canScopeByCustomerId, customerId, user?.roleKey]);
 
   useEffect(() => {
     fetchData(appliedFilters, expiryFilter);

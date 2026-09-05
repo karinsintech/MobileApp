@@ -64,7 +64,7 @@ export default function SetAppLockPinScreen({ navigation }: Props) {
       setAppLockPin(pin);
       Alert.alert(
         'App lock PIN set',
-        'This PIN unlocks the app after 30 minutes idle — it is not your account PIN.',
+        'This PIN unlocks the app after 2 minutes idle — it is not your account PIN.',
         [{ text: 'OK', onPress: () => navigation.goBack() }],
       );
     } catch (err: unknown) {

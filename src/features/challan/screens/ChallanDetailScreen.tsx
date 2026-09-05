@@ -14,6 +14,7 @@ import {
 import { Colors, FontSize, Spacing, Radius } from '../../../theme';
 import { formatINR, fmtDateTime } from '../../../utils/format';
 import { requiresAdminContextPicker } from '../../../types/auth';
+import { maskDlNumber, redactRedPii } from '../../../utils/piiProtection';
 import { useAppSelector } from '../../../store';
 import type { MoreStackParamList } from '../../../navigation/types';
 import type { ChallanOffenceRow } from '../types/challanDetail';
@@ -113,7 +114,8 @@ export default function ChallanDetailScreen() {
     ['Driver Name', challan.driverName],
     ['Owner Name', challan.ownerName],
     ['Violator Name', challan.nameOfViolator],
-    ['DL No', challan.dlNo],
+    // Echallan.dl_no is RED-tier — mask for every non-ADMIN role.
+    ['DL No', redactRedPii(challan.dlNo, user?.roleKey, maskDlNumber)],
     ['Sent to Reg Court', challan.sentToRegCourt],
     ['Sent to Virtual Court', challan.sentToVirtualCourt],
     ['Sent to Court On', challan.sentToCourtOn],

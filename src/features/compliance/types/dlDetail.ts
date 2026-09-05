@@ -21,15 +21,17 @@ export interface DLDetailPayload {
     dlHlValdfrDt?: string;
     dlHlValdtoDt?: string;
   };
+  /** Names only — Aadhaar / biometric keys are stripped client-side (DPDP). */
   personalDetails?: {
     bioFullName?: string;
     bioFirstName?: string;
     bioMiddleName?: string;
     bioLastName?: string;
   };
-  bioImageDetails?: {
-    biPhoto?: string;
-  };
+  /**
+   * Intentionally omitted from the client type: biPhoto / signatures / fingerprints
+   * are Restricted and must never be held in React state (see sanitizeDlPayload).
+   */
   serviceHistory?: Array<{ trName?: string }>;
   authorizedVehicles?: Array<{
     vecatg?: string;

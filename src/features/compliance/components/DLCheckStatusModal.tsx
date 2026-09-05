@@ -20,10 +20,15 @@ import {
 import dayjs from 'dayjs';
 import { complianceApi } from '../../../services/api/complianceApi';
 import { getApiErrorMessage } from '../../../services/api/client';
-import { AppImage } from '../../../components';
 import { Colors, FontSize, Spacing, Radius } from '../../../theme';
 import { fmtDate } from '../../../utils/format';
+import { maskDlNumber, redactRedPii } from '../../../utils/piiProtection';
+import { useAppSelector } from '../../../store';
 import { resolveDriverFullName } from '../utils/driverNameUtils';
+import {
+  sanitizeDlPayload,
+  sanitizeDlPayloadForPersist,
+} from '../utils/sanitizeDlPayload';
 import type { DLDetailPayload } from '../types/dlDetail';
 
 /** Backend DL pattern — state code + year + serial (optional letter / space). */
@@ -91,6 +96,7 @@ export default function DLCheckStatusModal({
   onClose,
   onAdded,
 }: DLCheckStatusModalProps) {
+  const { user } = useAppSelector((s) => s.auth);
   const [form, setForm] = useState<DriverInputForm>(EMPTY_FORM);
   const [licenseData, setLicenseData] = useState<DLDetailPayload | null>(null);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -139,8 +145,9 @@ export default function DLCheckStatusModal({
       });
 
       // Sarathi success payloads set errorStatus to the string "false".
+      // Strip Aadhaar/biometrics immediately — preview must not hold Restricted data.
       if (data?.errorStatus === 'false' && data?.errorMessage === null && data?.result) {
-        setLicenseData(data.result);
+        setLicenseData(sanitizeDlPayload(data.result));
         return;
       }
 
@@ -167,8 +174,14 @@ export default function DLCheckStatusModal({
 
     setAddLoading(true);
     try {
+      // Persist only the sanitized payload — never re-upload biometrics/Aadhaar.
+      const safeResult = sanitizeDlPayloadForPersist(licenseData);
+      if (!safeResult) {
+        Alert.alert('Error', 'Licence payload is incomplete');
+        return;
+      }
       await complianceApi.createDriver({
-        result: licenseData,
+        result: safeResult,
         mobileNo: form.mobileNo.replace(/\s+/g, ''),
         dob: form.dateOfBirth.trim(),
         driverName: form.driverName.trim(),
@@ -254,7 +267,6 @@ export default function DLCheckStatusModal({
   };
 
   const lic = licenseData?.licenseDetails;
-  const photo = licenseData?.bioImageDetails?.biPhoto;
   const driverFullName = resolveDriverFullName(licenseData, form.driverName);
 
   return (
@@ -338,7 +350,11 @@ export default function DLCheckStatusModal({
                 <View style={styles.summaryRow}>
                   <View style={styles.summaryCol}>
                     <DetailRow label="DL Status" value={lic?.dlStatus} />
-                    <DetailRow label="DL No" value={lic?.dlLicno} />
+                    {/* RED-tier: keep plaintext only for ADMIN; createDriver still uses unsanitized-of-mask payload. */}
+                    <DetailRow
+                      label="DL No"
+                      value={redactRedPii(lic?.dlLicno, user?.roleKey, maskDlNumber)}
+                    />
                     <DetailRow label="Driver Name" value={driverFullName} />
                     <DetailRow label="Issue Date" value={fmtDate(lic?.dlIssuedt)} />
                     <DetailRow
@@ -346,13 +362,6 @@ export default function DLCheckStatusModal({
                       value={lic?.omRtoFullname || lic?.olaName}
                     />
                   </View>
-                  {photo ? (
-                    <AppImage
-                      source={{ uri: `data:image/jpeg;base64,${photo}` }}
-                      style={styles.photo}
-                      resizeMode="cover"
-                    />
-                  ) : null}
                 </View>
 
                 <Text style={styles.sectionTitle}>Endorsement & Transaction Details</Text>
@@ -520,13 +529,6 @@ const styles = StyleSheet.create({
   },
   summaryRow: { flexDirection: 'row', gap: 12 },
   summaryCol: { flex: 1, gap: 8 },
-  photo: {
-    width: 88,
-    height: 110,
-    borderRadius: Radius.sm,
-    borderWidth: 1,
-    borderColor: Colors.glass.border,
-  },
   detailRow: { gap: 2 },
   detailLabel: { fontSize: FontSize.xs, color: Colors.text.label, fontWeight: '600' },
   detailValue: { fontSize: FontSize.sm, color: Colors.white, fontWeight: '600' },
