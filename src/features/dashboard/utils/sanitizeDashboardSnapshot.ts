@@ -3,7 +3,9 @@
  * Counts and totals remain so cold-start cards still paint; lists reload from API.
  */
 
-import type { DashboardSummary } from '../../types/dashboard';
+// Was '../../types/dashboard' (one level too shallow) — resolved to nonexistent
+// src/features/types/dashboard and left this PII-stripping util unchecked by tsc.
+import type { DashboardSummary } from '../../../types/dashboard';
 
 export function sanitizeDashboardSnapshot(summary: DashboardSummary): DashboardSummary {
   if (!summary.challans) return summary;
