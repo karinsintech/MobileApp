@@ -30,6 +30,7 @@ export function CompromisedDeviceScreen({ reasons = [] }: Props) {
             <Text key={reason} style={styles.reason}>
               • {reason}
             </Text>
+            
           ))}
         </View>
       ) : null}
