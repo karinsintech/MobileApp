@@ -12,6 +12,7 @@ import type { ComplianceSummary, ComplianceItem } from '../../../types/dashboard
 import {
   type ComplianceExpiryStatus,
   type RcListNavParams,
+  buildRcListBlacklistNavParams,
   buildRcListNavParams,
 } from '../../compliance/utils/complianceNavigationUtils';
 import { dashboardHeader, dashboardContentFont, DASHBOARD_LIGHT_WHITE } from '../dashboardTypography';
@@ -26,7 +27,10 @@ interface ComplianceCardProps {
 }
 
 // Same six VAHAN documents the web card tracks, in the same order.
-const DOCS: { key: keyof Omit<ComplianceSummary, 'totalAlerts' | 'totalVehicles'>; label: string }[] = [
+const DOCS: {
+  key: keyof Omit<ComplianceSummary, 'totalAlerts' | 'totalVehicles' | 'blacklistCount'>;
+  label: string;
+}[] = [
   { key: 'fitness', label: 'Fitness' },
   { key: 'insurance', label: 'Insurance' },
   { key: 'pucc', label: 'PUCC' },
@@ -136,7 +140,9 @@ function ComplianceCard({ compliance, onViewAll, onCompliancePress }: Compliance
   // Phones under ~400px need stacked header + flexible bars so labels/counts don't clip.
   const isNarrow = screenWidth < 400;
   const total = compliance?.totalAlerts ?? 0;
+  const blacklistCount = compliance?.blacklistCount ?? 0;
   const allClear = total === 0;
+  const hasBlacklist = blacklistCount > 0;
 
   // Scale bars to fleet size so compliant (green) segments are visible alongside alerts.
   const maxVal = DOCS.reduce((m, { key }) => {
@@ -179,6 +185,36 @@ function ComplianceCard({ compliance, onViewAll, onCompliancePress }: Compliance
       </View>
 
       <View style={[styles.body, isNarrow && styles.bodyNarrow]}>
+        {/* Always show blacklist count so zero is visible (web ComplianceSection parity). */}
+        <TouchableOpacity
+          style={[
+            styles.blacklistRow,
+            hasBlacklist ? styles.blacklistRowAlert : styles.blacklistRowClear,
+          ]}
+          onPress={() => onCompliancePress?.(buildRcListBlacklistNavParams())}
+          activeOpacity={0.85}
+          accessibilityLabel={`View ${blacklistCount} blacklisted vehicles in VAHAN`}
+        >
+          <Text
+            style={[
+              styles.blacklistLabel,
+              { color: hasBlacklist ? Colors.dangerLight : Colors.success },
+            ]}
+            maxFontSizeMultiplier={MAX_FONT_SCALE}
+          >
+            Black list
+          </Text>
+          <Text
+            style={[
+              styles.blacklistCount,
+              { color: hasBlacklist ? Colors.dangerLight : Colors.success },
+            ]}
+            maxFontSizeMultiplier={MAX_FONT_SCALE}
+          >
+            {blacklistCount}
+          </Text>
+        </TouchableOpacity>
+
         {DOCS.map(({ key, label }) => (
           <DocBar
             key={key}
@@ -231,6 +267,34 @@ const styles = StyleSheet.create({
   viewBtnText: { color: Colors.white, fontWeight: '700', fontSize: dashboardContentFont.sm },
   body: { padding: Spacing[4], gap: 9 },
   bodyNarrow: { paddingHorizontal: Spacing[3], gap: 8 },
+  blacklistRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderRadius: 4,
+    marginBottom: 2,
+  },
+  blacklistRowAlert: {
+    borderColor: Colors.dangerBorder,
+    backgroundColor: Colors.dangerBg,
+  },
+  blacklistRowClear: {
+    borderColor: Colors.glass.border,
+    backgroundColor: Colors.successBg,
+  },
+  blacklistLabel: {
+    fontSize: dashboardContentFont.xs,
+    fontWeight: '600',
+  },
+  blacklistCount: {
+    fontSize: dashboardContentFont.sm,
+    fontWeight: '700',
+    fontFamily: 'monospace',
+  },
   docRow: {
     flexDirection: 'row',
     alignItems: 'center',

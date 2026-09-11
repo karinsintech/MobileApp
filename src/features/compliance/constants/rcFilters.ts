@@ -41,6 +41,8 @@ export const RC_STATUS_OPTIONS = [
   { label: 'RC CANCELLED', value: 'RC_CANCELLED' },
   { label: 'NOC ISSUED', value: 'NOC_ISSUED' },
   { label: 'RC SURRENDER', value: 'RC_SURRENDER' },
+  // Filters on rcBlacklistStatus (not rcStatus) — handled specially in rcList API
+  { label: 'BLACK LIST', value: 'BLACKLIST' },
 ] as const;
 
 export interface RcGroupOption {

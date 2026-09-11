@@ -17,13 +17,13 @@ import { isCategoryAlertsEnabled } from './notificationPreferences';
 import { showDerivedFleetPush } from './localFleetNotificationService';
 import { evaluateWalletLowBalance, type WalletAlertScope } from './walletAlertUtils';
 
-const COMPLIANCE_DOC_KEYS: (keyof Omit<ComplianceSummary, 'totalAlerts' | 'totalVehicles'>)[] = [
+const COMPLIANCE_DOC_KEYS: (keyof Omit<ComplianceSummary, 'totalAlerts' | 'totalVehicles' | 'blacklistCount'>)[] = [
   'fitness', 'insurance', 'pucc', 'permit', 'tax', 'np',
 ];
 
 /** Same six docs / labels as the dashboard Vahan Compliance card. */
 const COMPLIANCE_DOC_ROWS: {
-  key: keyof Omit<ComplianceSummary, 'totalAlerts' | 'totalVehicles'>;
+  key: keyof Omit<ComplianceSummary, 'totalAlerts' | 'totalVehicles' | 'blacklistCount'>;
   label: string;
 }[] = [
   { key: 'fitness', label: 'Fitness' },

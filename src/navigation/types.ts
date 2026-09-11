@@ -61,6 +61,8 @@ export type RCListParams = {
   expiryType?: string;
   expiryStatus?: 'expired' | 'expiring' | 'valid';
   vehicleNo?: string;
+  /** Dashboard Black list drill-down — web uses ?status=BLACKLIST. */
+  status?: string;
 } | undefined;
 
 export type DLListParams = {

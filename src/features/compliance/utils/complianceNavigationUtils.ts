@@ -23,6 +23,13 @@ export interface RcListNavParams {
   expiryType?: string;
   expiryStatus?: ComplianceExpiryStatus;
   vehicleNo?: string;
+  /** RC list status filter — BLACKLIST filters on rcBlacklistStatus (web parity). */
+  status?: string;
+}
+
+/** Opens VAHAN RC list pre-filtered to blacklisted RCs (status=BLACKLIST). */
+export function buildRcListBlacklistNavParams(): RcListNavParams {
+  return { status: 'BLACKLIST' };
 }
 
 /** Total documents expiring soon across 7 / 15 / 30 day buckets. */

@@ -97,6 +97,8 @@ export interface ComplianceSummary {
   pucc: ComplianceItem;
   permit: ComplianceItem;
   np: ComplianceItem;
+  /** RCs with a real VAHAN blacklist status (excludes NA / empty placeholders). */
+  blacklistCount?: number;
   totalAlerts: number;
   totalVehicles?: number;
 }

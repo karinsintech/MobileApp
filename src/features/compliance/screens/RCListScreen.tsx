@@ -65,6 +65,8 @@ function buildInitialFilters(routeParams: MoreStackParamList['RCList']): RCFilte
   return {
     ...EMPTY_RC_FILTERS,
     ...(routeParams.vehicleNo ? { vehicleNo: routeParams.vehicleNo.trim() } : {}),
+    // Dashboard Black list deep-link sends status=BLACKLIST (web VehicleRcs parity).
+    ...(routeParams.status ? { status: routeParams.status } : {}),
   };
 }
 
@@ -143,6 +145,12 @@ const expiryVariant = (dateStr: string | null) => {
   return 'success';
 };
 
+// VAHAN often returns NA / N/A placeholders when the RC is not blacklisted.
+function hasRcBlacklistStatus(value?: string | null): boolean {
+  const normalized = String(value ?? '').trim().toUpperCase();
+  return Boolean(normalized) && !['NA', 'N/A', '-', 'NULL'].includes(normalized);
+}
+
 interface RCItem {
   id: string;
   vehicleNo: string;
@@ -154,6 +162,8 @@ interface RCItem {
   permitUpto: string | null;
   npUpto: string | null;
   status: string;
+  /** Raw rcBlacklistStatus — truthy only when VAHAN reports a real blacklist. */
+  blacklistStatus: string;
   raw: Record<string, any>;
 }
 
@@ -180,7 +190,7 @@ export default function RCListScreen() {
   const [customers, setCustomers] = useState<RcCustomerOption[]>([]);
   const [groups, setGroups] = useState<RcGroupOption[]>([]);
   const [showFilters, setShowFilters] = useState(() => Boolean(
-    buildInitialExpiryFilter(route.params) || route.params?.vehicleNo,
+    buildInitialExpiryFilter(route.params) || route.params?.vehicleNo || route.params?.status,
   ));
   const [items, setItems] = useState<RCItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -199,7 +209,7 @@ export default function RCListScreen() {
     setDraftFilters(nextFilters);
     setAppliedFilters(nextFilters);
     setExpiryFilter(nextExpiry);
-    if (nextExpiry || route.params?.vehicleNo) setShowFilters(true);
+    if (nextExpiry || route.params?.vehicleNo || route.params?.status) setShowFilters(true);
   }, [route.params]);
 
   useEffect(() => {
@@ -252,6 +262,7 @@ export default function RCListScreen() {
         permitUpto: row.rcPermitValidUpto || null,
         npUpto: row.rcNpUpto || null,
         status: row.rcStatus ?? '',
+        blacklistStatus: row.rcBlacklistStatus ?? '',
         raw: row,
       }));
       setItems(mapped);
@@ -356,33 +367,43 @@ export default function RCListScreen() {
     nav.navigate('RCDetail', { rcId: Number(item.raw?.id) || 0, rc: item.raw });
   }, [nav]);
 
-  const renderItem = ({ item }: { item: RCItem }) => (
-    <TouchableOpacity activeOpacity={0.8} onPress={() => openDetail(item)}>
-    <GlassCard style={styles.card}>
-      <View style={styles.cardTop}>
-        <View style={styles.left}>
-          <Text style={styles.vehicleNo}>{item.vehicleNo}</Text>
-          {item.ownerName ? <Text style={styles.owner} numberOfLines={1}>{item.ownerName}</Text> : null}
-        </View>
-      </View>
-      <View style={styles.complianceGrid}>
-        {RC_LIST_EXPIRY_FIELDS.map((field) => {
-          const dateValue = field.getValue(item);
-          return (
-            <View key={field.label} style={styles.compItem}>
-              <Text style={styles.compLabel}>{field.label}</Text>
-              <StatusPill
-                label={dateValue ? fmtDate(dateValue) : 'N/A'}
-                variant={expiryVariant(dateValue)}
-                small
-              />
+  const renderItem = ({ item }: { item: RCItem }) => {
+    // Web VehicleRcs table shows "Yes" in Black list column when status is real.
+    const isBlacklisted = hasRcBlacklistStatus(item.blacklistStatus);
+
+    return (
+      <TouchableOpacity activeOpacity={0.8} onPress={() => openDetail(item)}>
+        <GlassCard style={styles.card}>
+          <View style={styles.cardTop}>
+            <View style={styles.left}>
+              <Text style={styles.vehicleNo}>{item.vehicleNo}</Text>
+              {item.ownerName ? <Text style={styles.owner} numberOfLines={1}>{item.ownerName}</Text> : null}
             </View>
-          );
-        })}
-      </View>
-    </GlassCard>
-    </TouchableOpacity>
-  );
+            {isBlacklisted ? (
+              <View style={styles.right}>
+                <StatusPill label="Black List" variant="danger" small />
+              </View>
+            ) : null}
+          </View>
+          <View style={styles.complianceGrid}>
+            {RC_LIST_EXPIRY_FIELDS.map((field) => {
+              const dateValue = field.getValue(item);
+              return (
+                <View key={field.label} style={styles.compItem}>
+                  <Text style={styles.compLabel}>{field.label}</Text>
+                  <StatusPill
+                    label={dateValue ? fmtDate(dateValue) : 'N/A'}
+                    variant={expiryVariant(dateValue)}
+                    small
+                  />
+                </View>
+              );
+            })}
+          </View>
+        </GlassCard>
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <LiquidBackground>
@@ -497,8 +518,9 @@ const styles = StyleSheet.create({
   statCountActive: { textDecorationLine: 'underline' },
   list:          { paddingHorizontal: Spacing[4], paddingTop: Spacing[2], gap: 8, paddingBottom: 32 },
   card:          { padding: 13 },
-  cardTop:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 },
-  left:          { flex: 1, gap: 2 },
+  cardTop:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10, gap: 8 },
+  left:          { flex: 1, gap: 2, minWidth: 0 },
+  right:         { alignItems: 'flex-end', gap: 4, maxWidth: '42%' },
   vehicleNo:     { fontSize: FontSize.base, fontWeight: '700', color: Colors.white, fontFamily: 'monospace' },
   owner:         { fontSize: FontSize.sm, color: Colors.text.secondary },
   complianceGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
