@@ -57,6 +57,8 @@ export interface RCListResponse {
   records?: unknown[];
   totalCount?: number;
   expiryCounts?: RCExpiryCounts;
+  /** RCs with a real VAHAN blacklist status (excludes NA / empty placeholders). */
+  blacklistCount?: number;
 }
 
 export const complianceApi = {

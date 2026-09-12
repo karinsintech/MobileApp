@@ -14,10 +14,7 @@ import {
 } from 'react-native';
 import { Colors, FontSize, Spacing, Radius } from '../../../theme';
 import { broadcastPopupEvents } from '../../../services/notifications/broadcastPopupEvents';
-import {
-  markNotificationRead,
-  resolveNotificationImageUrl,
-} from '../../../services/notifications/notificationCenter';
+import { markNotificationRead } from '../../../services/notifications/notificationCenter';
 import { notificationApi } from '../../../services/api/notificationApi';
 import type { FleetNotification } from '../../../services/notifications/notificationTypes';
 import {
@@ -27,6 +24,7 @@ import {
 } from '../../dashboard/dashboardTypography';
 import NotificationImagePreview, {
   NotificationImageLightbox,
+  useNotificationImageAdvance,
 } from './NotificationImagePreview';
 
 export default function BroadcastNotificationPopupHost() {
@@ -62,8 +60,31 @@ export default function BroadcastNotificationPopupHost() {
 
   if (!current) return null;
 
+  return (
+    <BroadcastNotificationPopupBody
+      current={current}
+      imagePreviewOpen={imagePreviewOpen}
+      setImagePreviewOpen={setImagePreviewOpen}
+      dismiss={dismiss}
+    />
+  );
+}
+
+/** Body split so image-candidate hook runs only while a notification is open. */
+function BroadcastNotificationPopupBody({
+  current,
+  imagePreviewOpen,
+  setImagePreviewOpen,
+  dismiss,
+}: {
+  current: FleetNotification;
+  imagePreviewOpen: boolean;
+  setImagePreviewOpen: (open: boolean) => void;
+  dismiss: () => void;
+}) {
   const body = current.detail?.trim() || current.body;
-  const imageUrl = resolveNotificationImageUrl(current.image ?? current.data?.image);
+  const rawImage = current.image ?? current.data?.image;
+  const { src: imageUrl, onError } = useNotificationImageAdvance(rawImage);
 
   return (
     <Modal
@@ -95,9 +116,10 @@ export default function BroadcastNotificationPopupHost() {
               showsVerticalScrollIndicator={false}
             >
               {body ? <Text style={styles.body}>{body}</Text> : null}
-              {imageUrl ? (
+              {rawImage ? (
                 <NotificationImagePreview
                   uri={imageUrl}
+                  onLoadError={onError}
                   title={current.title}
                   height={200}
                   embeddedInModal
@@ -119,6 +141,7 @@ export default function BroadcastNotificationPopupHost() {
               uri={imageUrl}
               title={current.title}
               onClose={() => setImagePreviewOpen(false)}
+              onError={onError}
             />
           </View>
         ) : null}
@@ -131,62 +154,54 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
   },
-  lightboxHost: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 30,
-    elevation: 30,
-  },
   overlay: {
     flex: 1,
-    backgroundColor: Colors.bg.overlay,
+    backgroundColor: 'rgba(0,0,0,0.55)',
     justifyContent: 'center',
-    paddingHorizontal: Spacing[5],
+    padding: Spacing[5],
   },
   card: {
     backgroundColor: Colors.bg.elevated,
     borderRadius: Radius.lg,
     borderWidth: 1,
-    borderColor: 'rgba(66, 165, 255, 0.35)',
-    maxHeight: '78%',
+    borderColor: Colors.glass.border,
+    maxHeight: '86%',
     overflow: 'hidden',
   },
   head: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: Spacing[3],
+    gap: 10,
     paddingHorizontal: Spacing[4],
     paddingTop: Spacing[4],
     paddingBottom: Spacing[2],
   },
   title: {
     ...dashboardHeader,
-    fontWeight: '700',
     flex: 1,
-    fontSize: FontSize.lg,
+    color: Colors.white,
   },
   close: {
     color: DASHBOARD_LIGHT_WHITE,
-    fontSize: FontSize.lg,
+    fontSize: FontSize.xl,
     fontWeight: '600',
-    lineHeight: 22,
+    lineHeight: 24,
   },
   scroll: {
-    flexGrow: 0,
+    maxHeight: 420,
   },
   scrollContent: {
     paddingHorizontal: Spacing[4],
     paddingBottom: Spacing[3],
-    gap: Spacing[3],
+    gap: 10,
   },
   body: {
     ...dashboardBody,
-    lineHeight: 20,
+    color: DASHBOARD_LIGHT_WHITE,
   },
   okBtn: {
-    marginHorizontal: Spacing[4],
-    marginBottom: Spacing[4],
-    marginTop: Spacing[1],
+    margin: Spacing[4],
+    marginTop: Spacing[2],
     backgroundColor: Colors.blue,
     borderRadius: Radius.md,
     paddingVertical: 12,
@@ -195,6 +210,11 @@ const styles = StyleSheet.create({
   okText: {
     color: Colors.white,
     fontWeight: '700',
-    fontSize: FontSize.md,
+    fontSize: FontSize.sm,
+  },
+  lightboxHost: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 30,
+    elevation: 30,
   },
 });

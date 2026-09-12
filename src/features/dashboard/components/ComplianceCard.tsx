@@ -135,14 +135,89 @@ function DocBar({
   );
 }
 
+/**
+ * Same grid as Fitness/NP/PUCC: bar + blacklisted / 0 / clear.
+ * Blacklist has no "expiring" window — middle slot stays 0 for column alignment.
+ */
+function BlacklistBar({
+  blacklistCount,
+  totalVehicles,
+  compact,
+  onCompliancePress,
+}: {
+  blacklistCount: number;
+  totalVehicles: number;
+  compact?: boolean;
+  onCompliancePress?: (params: RcListNavParams) => void;
+}) {
+  const base = Math.max(0, totalVehicles);
+  const flagged = Math.max(0, blacklistCount);
+  const clearCount = Math.max(0, base - flagged);
+  const flaggedPct = base > 0 ? (flagged / base) * 100 : 0;
+  const clearPct = Math.max(0, 100 - flaggedPct);
+  const hasFlagged = flagged > 0;
+
+  return (
+    <View style={[styles.docRow, compact && styles.docRowCompact]}>
+      <Text
+        style={[styles.docLabel, compact && styles.docLabelCompact]}
+        numberOfLines={1}
+        maxFontSizeMultiplier={MAX_FONT_SCALE}
+      >
+        Black list
+      </Text>
+      <View style={[styles.track, compact && styles.trackCompact]}>
+        {!hasFlagged ? (
+          <View style={[styles.fill, styles.fillOk]} />
+        ) : (
+          <>
+            <View style={[styles.fill, { width: `${flaggedPct}%`, backgroundColor: Colors.danger }]} />
+            {clearCount > 0 ? (
+              <View style={[styles.fill, { width: `${clearPct}%`, backgroundColor: Colors.success }]} />
+            ) : null}
+          </>
+        )}
+      </View>
+      <View style={[styles.countsWrap, compact && styles.countsWrapCompact]}>
+        <CountTap
+          count={flagged}
+          tone="expired"
+          compact={compact}
+          onPress={() => onCompliancePress?.(buildRcListBlacklistNavParams())}
+        />
+        <Text style={[styles.countSep, compact && styles.countSepCompact]} maxFontSizeMultiplier={MAX_FONT_SCALE}>/</Text>
+        <Text
+          style={[
+            compact ? styles.countTextCompact : styles.countText,
+            styles.countExpiring,
+          ]}
+          maxFontSizeMultiplier={MAX_FONT_SCALE}
+        >
+          0
+        </Text>
+        <Text style={[styles.countSep, compact && styles.countSepCompact]} maxFontSizeMultiplier={MAX_FONT_SCALE}>/</Text>
+        <Text
+          style={[
+            compact ? styles.countTextCompact : styles.countText,
+            styles.countValid,
+          ]}
+          maxFontSizeMultiplier={MAX_FONT_SCALE}
+        >
+          {clearCount}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 function ComplianceCard({ compliance, onViewAll, onCompliancePress }: ComplianceCardProps) {
   const { width: screenWidth } = useWindowDimensions();
   // Phones under ~400px need stacked header + flexible bars so labels/counts don't clip.
   const isNarrow = screenWidth < 400;
   const total = compliance?.totalAlerts ?? 0;
   const blacklistCount = compliance?.blacklistCount ?? 0;
+  const totalVehicles = compliance?.totalVehicles ?? 0;
   const allClear = total === 0;
-  const hasBlacklist = blacklistCount > 0;
 
   // Scale bars to fleet size so compliant (green) segments are visible alongside alerts.
   const maxVal = DOCS.reduce((m, { key }) => {
@@ -151,7 +226,7 @@ function ComplianceCard({ compliance, onViewAll, onCompliancePress }: Compliance
     const expiring = item?.exp30 ?? item?.expiringSoon ?? 0;
     const valid = item?.valid ?? 0;
     return Math.max(m, expired + expiring + valid);
-  }, compliance?.totalVehicles ?? 0);
+  }, totalVehicles);
 
   return (
     <GlassCard style={styles.card}>
@@ -185,36 +260,6 @@ function ComplianceCard({ compliance, onViewAll, onCompliancePress }: Compliance
       </View>
 
       <View style={[styles.body, isNarrow && styles.bodyNarrow]}>
-        {/* Always show blacklist count so zero is visible (web ComplianceSection parity). */}
-        <TouchableOpacity
-          style={[
-            styles.blacklistRow,
-            hasBlacklist ? styles.blacklistRowAlert : styles.blacklistRowClear,
-          ]}
-          onPress={() => onCompliancePress?.(buildRcListBlacklistNavParams())}
-          activeOpacity={0.85}
-          accessibilityLabel={`View ${blacklistCount} blacklisted vehicles in VAHAN`}
-        >
-          <Text
-            style={[
-              styles.blacklistLabel,
-              { color: hasBlacklist ? Colors.dangerLight : Colors.success },
-            ]}
-            maxFontSizeMultiplier={MAX_FONT_SCALE}
-          >
-            Black list
-          </Text>
-          <Text
-            style={[
-              styles.blacklistCount,
-              { color: hasBlacklist ? Colors.dangerLight : Colors.success },
-            ]}
-            maxFontSizeMultiplier={MAX_FONT_SCALE}
-          >
-            {blacklistCount}
-          </Text>
-        </TouchableOpacity>
-
         {DOCS.map(({ key, label }) => (
           <DocBar
             key={key}
@@ -226,6 +271,13 @@ function ComplianceCard({ compliance, onViewAll, onCompliancePress }: Compliance
             onCompliancePress={onCompliancePress}
           />
         ))}
+        {/* After NP — same bar + count columns as web BlacklistBar. */}
+        <BlacklistBar
+          blacklistCount={blacklistCount}
+          totalVehicles={totalVehicles > 0 ? totalVehicles : Math.max(maxVal, 1)}
+          compact={isNarrow}
+          onCompliancePress={onCompliancePress}
+        />
       </View>
 
       <View style={[styles.legend, isNarrow && styles.legendNarrow]}>
@@ -267,34 +319,6 @@ const styles = StyleSheet.create({
   viewBtnText: { color: Colors.white, fontWeight: '700', fontSize: dashboardContentFont.sm },
   body: { padding: Spacing[4], gap: 9 },
   bodyNarrow: { paddingHorizontal: Spacing[3], gap: 8 },
-  blacklistRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-    paddingVertical: 6,
-    paddingHorizontal: 8,
-    borderWidth: 1,
-    borderRadius: 4,
-    marginBottom: 2,
-  },
-  blacklistRowAlert: {
-    borderColor: Colors.dangerBorder,
-    backgroundColor: Colors.dangerBg,
-  },
-  blacklistRowClear: {
-    borderColor: Colors.glass.border,
-    backgroundColor: Colors.successBg,
-  },
-  blacklistLabel: {
-    fontSize: dashboardContentFont.xs,
-    fontWeight: '600',
-  },
-  blacklistCount: {
-    fontSize: dashboardContentFont.sm,
-    fontWeight: '700',
-    fontFamily: 'monospace',
-  },
   docRow: {
     flexDirection: 'row',
     alignItems: 'center',

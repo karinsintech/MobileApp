@@ -1,9 +1,15 @@
 /**
- * VAHAN RC summary cards — mirrors web VehicleRcsContainer cardData buckets.
+ * VAHAN RC summary cards — mirrors web VehicleRcsContainer cardData buckets
+ * (six expiry tiles + Black List total).
  */
 
 export const RC_CARD_ACCENT = '#0093FF';
 export const RC_CARD_WARNING = '#F5A623';
+/** Matches web status-expired / Ban accent for the Black List total. */
+export const RC_CARD_DANGER = '#F5A623';
+
+/** Status filter value sent to /vehicleRc/rcList for blacklist scope (web parity). */
+export const RC_BLACKLIST_STATUS = 'BLACKLIST';
 
 export interface RCExpiryBucket {
   expiringSoon?: number;
@@ -109,3 +115,14 @@ export const RC_SUMMARY_CARDS: RCSummaryCard[] = [
     }),
   },
 ];
+
+/**
+ * Seventh summary tile — single Total count from rcList.blacklistCount.
+ * Tap applies status=BLACKLIST (filters on rcBlacklistStatus, not rcStatus).
+ */
+export const RC_BLACKLIST_CARD = {
+  key: 'blacklist',
+  title: 'Black List',
+  icon: '⛔',
+  statusFilter: RC_BLACKLIST_STATUS,
+} as const;

@@ -24,6 +24,7 @@ import {
 } from 'react-native';
 import AppImage from '../../../components/common/AppImage';
 import { downloadRemoteUrlToDownloads } from '../../../utils/fileExport';
+import { getNotificationImageCandidates } from '../../../services/notifications/notificationCenter';
 import { Colors, FontSize, Spacing, Radius } from '../../../theme';
 
 const MIN_ZOOM = 0.5;
@@ -31,7 +32,15 @@ const MAX_ZOOM = 4;
 const ZOOM_STEP = 0.25;
 
 type Props = {
-  uri: string;
+  /** Raw API image path/URL — candidates are resolved + retried on load error (web parity). */
+  image?: string | null;
+  /**
+   * Pre-resolved working URL from a parent `useNotificationImageAdvance` hook.
+   * Use with `onLoadError` so thumb + lightbox share the same candidate index.
+   */
+  uri?: string | null;
+  /** Advances parent candidates when `uri` is controlled outside this component. */
+  onLoadError?: () => void;
   title?: string;
   /** Compact inline thumbnail size (inbox card vs popup). */
   height?: number;
@@ -41,13 +50,36 @@ type Props = {
    */
   embeddedInModal?: boolean;
   onOpen?: () => void;
+  /** Notifies parent when the working candidate URL changes (lightbox / download). */
+  onSrcChange?: (src: string | null) => void;
 };
 
 type LightboxProps = {
   uri: string;
   title?: string;
   onClose: () => void;
+  onError?: () => void;
 };
+
+/**
+ * Walk upload URL candidates on FastImage onError — same as web useNotificationImageAdvance.
+ */
+export function useNotificationImageAdvance(image?: string | null): {
+  src: string | null;
+  onError: () => void;
+} {
+  const candidates = useMemo(() => getNotificationImageCandidates(image), [image]);
+  const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    setIndex(0);
+  }, [image]);
+
+  return {
+    src: candidates.length && index < candidates.length ? candidates[index] : null,
+    onError: () => setIndex((prev) => prev + 1),
+  };
+}
 
 /** Prefer original filename from URL; fall back to a safe notification name. */
 function getDownloadFileName(uri: string, title?: string): string {
@@ -94,7 +126,7 @@ function ToolbarButton({
 /**
  * Full-screen lightbox body — safe to mount as a sibling inside an existing Modal.
  */
-export function NotificationImageLightbox({ uri, title, onClose }: LightboxProps) {
+export function NotificationImageLightbox({ uri, title, onClose, onError }: LightboxProps) {
   const [zoom, setZoom] = useState(1);
   const [isDownloading, setIsDownloading] = useState(false);
   // Inline status avoids Alert-in-Modal flicker / silent failure on Android OEMs.
@@ -157,6 +189,7 @@ export function NotificationImageLightbox({ uri, title, onClose }: LightboxProps
               transform: [{ scale: zoom }],
             }}
             resizeMode="contain"
+            onError={onError}
           />
         </Pressable>
 
@@ -218,15 +251,28 @@ export function NotificationImageLightbox({ uri, title, onClose }: LightboxProps
 
 /**
  * Renders a tappable notification image; opens admin-style Preview on press.
+ * Retries alternate upload mounts when the first URL 404s (web parity).
  */
 export default function NotificationImagePreview({
+  image,
   uri,
+  onLoadError,
   title,
   height = 220,
   embeddedInModal = false,
   onOpen,
+  onSrcChange,
 }: Props) {
+  // Prefer raw `image` so this component owns candidate retries; when parent
+  // already advanced (popup lightbox), use controlled `uri` + `onLoadError`.
+  const advanced = useNotificationImageAdvance(image ?? null);
+  const src = image ? advanced.src : (uri ?? null);
+  const onError = image ? advanced.onError : onLoadError;
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    onSrcChange?.(src);
+  }, [src, onSrcChange]);
 
   const openPreview = useCallback(() => {
     // Parent Modal hosts the lightbox — avoid nesting a second Modal on Android.
@@ -237,13 +283,16 @@ export default function NotificationImagePreview({
     setOpen(true);
   }, [embeddedInModal, onOpen]);
 
+  if (!src) return null;
+
   return (
     <>
       <Pressable onPress={openPreview} accessibilityRole="imagebutton" accessibilityLabel="Open image preview">
         <AppImage
-          source={{ uri }}
+          source={{ uri: src }}
           style={[styles.thumb, { height }]}
           resizeMode="contain"
+          onError={onError}
         />
         <View style={styles.previewHint} pointerEvents="none">
           <Text style={styles.previewHintText}>Preview</Text>
@@ -259,9 +308,10 @@ export default function NotificationImagePreview({
           statusBarTranslucent
         >
           <NotificationImageLightbox
-            uri={uri}
+            uri={src}
             title={title}
             onClose={() => setOpen(false)}
+            onError={onError}
           />
         </Modal>
       ) : null}

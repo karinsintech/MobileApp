@@ -28,7 +28,10 @@ import {
   type RcGroupOption,
 } from '../constants/rcFilters';
 import {
+  RC_BLACKLIST_CARD,
+  RC_BLACKLIST_STATUS,
   RC_CARD_ACCENT,
+  RC_CARD_DANGER,
   RC_CARD_WARNING,
   RC_SUMMARY_CARDS,
   type RCExpiryCounts,
@@ -195,6 +198,8 @@ export default function RCListScreen() {
   const [items, setItems] = useState<RCItem[]>([]);
   const [total, setTotal] = useState(0);
   const [expiryCounts, setExpiryCounts] = useState<RCExpiryCounts | null>(null);
+  // Same source as web VehicleRcsContainer — always from rcList, not page-local filter math.
+  const [blacklistCount, setBlacklistCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefresh] = useState(false);
 
@@ -268,6 +273,7 @@ export default function RCListScreen() {
       setItems(mapped);
       setTotal(data.totalCount ?? mapped.length);
       setExpiryCounts(data.expiryCounts ?? null);
+      setBlacklistCount(Number(data.blacklistCount ?? 0));
     } catch { /* handle silently — FlatList shows empty state */ }
     finally { setLoading(false); setRefresh(false); }
   }, [customerId]);
@@ -288,16 +294,36 @@ export default function RCListScreen() {
     setExpiryFilter(null);
   };
 
+  const isBlacklistFilterActive = appliedFilters.status === RC_BLACKLIST_STATUS;
+
+  const clearBlacklistStatusFilter = () => {
+    // Expiry cards and blacklist status must not stack — API scopes are exclusive on web.
+    if (!isBlacklistFilterActive) return;
+    setDraftFilters((prev) => ({ ...prev, status: '' }));
+    setAppliedFilters((prev) => ({ ...prev, status: '' }));
+  };
+
   const handleCardCountPress = (filter: RCExpiryFilter) => {
+    clearBlacklistStatusFilter();
     setExpiryFilter((prev) => (
       matchesRcExpiryFilter(prev, filter) ? null : filter
     ));
   };
 
   const handleCardPress = (cardKey: string, leftFilter: RCExpiryFilter) => {
+    clearBlacklistStatusFilter();
     setExpiryFilter((prev) => (
       isRcCardFilterActive(prev, cardKey) ? null : leftFilter
     ));
+  };
+
+  // Web Black List card: clear expiry scope and apply status=BLACKLIST (toggle off if already on).
+  const handleBlacklistCardPress = () => {
+    setExpiryFilter(null);
+    const nextStatus = isBlacklistFilterActive ? '' : RC_BLACKLIST_STATUS;
+    setDraftFilters((prev) => ({ ...prev, status: nextStatus }));
+    setAppliedFilters((prev) => ({ ...prev, status: nextStatus }));
+    if (nextStatus) setShowFilters(true);
   };
 
   const listHeader = (
@@ -358,6 +384,43 @@ export default function RCListScreen() {
           </TouchableOpacity>
         );
       })}
+
+      {/* Seventh tile — Total blacklisted RCs (web VehicleRcs cardData parity). */}
+      <TouchableOpacity
+        key={RC_BLACKLIST_CARD.key}
+        style={styles.statTile}
+        activeOpacity={0.85}
+        onPress={handleBlacklistCardPress}
+        accessibilityLabel={`Black List total ${blacklistCount}`}
+      >
+        <GlassCard style={[styles.statCard, isBlacklistFilterActive && styles.statCardActive]}>
+          <View style={styles.statHead}>
+            <Text style={styles.statTitle} numberOfLines={2}>{RC_BLACKLIST_CARD.title}</Text>
+            <Text style={styles.statIcon}>{RC_BLACKLIST_CARD.icon}</Text>
+          </View>
+          <View style={styles.statCounts}>
+            <View style={styles.statCountCol}>
+              <Text style={styles.statCountLabel}>Total</Text>
+              <Text style={[
+                styles.statCountValue,
+                { color: RC_CARD_DANGER },
+                isBlacklistFilterActive && styles.statCountActive,
+              ]}>
+                {blacklistCount}
+              </Text>
+            </View>
+            {/* Invisible spacer keeps height aligned with Expiring/Expired expiry cards. */}
+            <View
+              style={[styles.statCountCol, styles.statCountSpacer]}
+              importantForAccessibility="no-hide-descendants"
+              accessibilityElementsHidden
+            >
+              <Text style={styles.statCountLabel}>Expired</Text>
+              <Text style={styles.statCountValue}>0</Text>
+            </View>
+          </View>
+        </GlassCard>
+      </TouchableOpacity>
     </ScrollView>
   );
 
@@ -516,6 +579,7 @@ const styles = StyleSheet.create({
   statCountLabel: { fontSize: 10, color: Colors.text.subtle },
   statCountValue: { fontSize: FontSize.lg, fontWeight: '800' },
   statCountActive: { textDecorationLine: 'underline' },
+  statCountSpacer: { opacity: 0 },
   list:          { paddingHorizontal: Spacing[4], paddingTop: Spacing[2], gap: 8, paddingBottom: 32 },
   card:          { padding: 13 },
   cardTop:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10, gap: 8 },

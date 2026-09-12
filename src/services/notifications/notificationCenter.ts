@@ -21,7 +21,7 @@ import {
 export const NOTIFICATIONS_CACHE_KEY = 'notifications_center';
 const NOTIFICATIONS_IMAGE_FIX_KEY = 'notifications_center_image_fix';
 /** Bump when image URL rules change so stale rewritten paths are dropped. */
-const NOTIFICATIONS_IMAGE_FIX_VERSION = 6;
+const NOTIFICATIONS_IMAGE_FIX_VERSION = 7;
 const MAX_STORED_NOTIFICATIONS = 200;
 
 /** Prefix for alerts derived from the dashboard summary. */
@@ -30,17 +30,70 @@ export const DASHBOARD_NOTIFICATION_ID_PREFIX = 'dash-';
 /** Broadcast rows synced from Node GET /notification. */
 export const BROADCAST_CATEGORY = 'broadcast';
 
+function isEmptyImageValue(value: string): boolean {
+  return !value
+    || value === 'null'
+    || value === 'undefined'
+    || value === 'None';
+}
+
+/** `/uploads/notification/foo.jpg` → `/uploads/foo.jpg` (matches Express static mount). */
+function rewriteStoredUploadsPath(urlOrPath: string): string {
+  return urlOrPath.replace(/\/uploads\/notification\/([^/?#]+)/gi, '/uploads/$1');
+}
+
+function extractUploadsBasename(image: string): string | null {
+  const match = String(image).match(/\/uploads\/(?:notification\/)?([^/?#]+)/i);
+  return match?.[1] ?? null;
+}
+
 /**
- * Absolute URL for notification artwork — same rules as web NotificationDrawer.resolveImageUrl:
- * full http(s) URLs pass through; relative paths are prefixed with API origin (strip /api).
+ * Ordered image URL candidates — same chain as web resolveNotificationImageUrl.
+ * Backend stores `/uploads/notification/<file>` but Express serves that folder at
+ * `/uploads` and `/api/uploads`, so the live path is `/uploads/<file>`.
  */
-export function resolveNotificationImageUrl(image?: string | null): string | null {
-  const raw = String(image ?? '').trim();
-  if (!raw || raw === 'null' || raw === 'undefined') return null;
-  if (raw.startsWith('http') || raw.startsWith('data:')) return raw;
+export function getNotificationImageCandidates(image?: string | null): string[] {
+  if (image == null) return [];
+
+  const trimmed = String(image).trim();
+  if (isEmptyImageValue(trimmed)) return [];
+
+  // data: URIs are already displayable — never rewrite them through the API host.
+  if (trimmed.startsWith('data:')) return [trimmed];
+
+  const candidates: string[] = [];
+  const pushUnique = (url: string | null | undefined) => {
+    const value = String(url || '').trim();
+    if (!value || candidates.includes(value)) return;
+    candidates.push(value);
+  };
 
   const apiOrigin = API_BASE_URL.replace(/\/api\/?$/i, '');
-  return `${apiOrigin}${raw.startsWith('/') ? raw : `/${raw}`}`;
+  const basename = extractUploadsBasename(trimmed);
+
+  // Absolute URL first (after mount rewrite) — some older rows already stored full URLs.
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    pushUnique(rewriteStoredUploadsPath(trimmed));
+  }
+
+  // Express static mounts (notification dir → /uploads and /api/uploads).
+  if (basename && apiOrigin) {
+    pushUnique(`${apiOrigin}/uploads/${basename}`);
+    pushUnique(`${apiOrigin}/api/uploads/${basename}`);
+  }
+
+  // Relative DB path rewritten to match the mount.
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://') && trimmed.includes('/')) {
+    const withSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+    pushUnique(`${apiOrigin}${rewriteStoredUploadsPath(withSlash)}`);
+  }
+
+  return candidates;
+}
+
+/** First usable URL — identical to web Admin / Customer bell helpers. */
+export function resolveNotificationImageUrl(image?: string | null): string | null {
+  return getNotificationImageCandidates(image)[0] ?? null;
 }
 
 /** Operational alerts — stay visible while the underlying issue exists (web bell parity). */
@@ -122,7 +175,8 @@ function isBrokenMediaRouteUrl(value?: string | null): boolean {
 
 /**
  * Drop rewritten media-route URLs from an older app build so the next API sync
- * can restore real `/uploads/notification/...` paths (SIVA-style).
+ * can restore real `/uploads/notification/...` paths. Prefer keeping the raw
+ * relative path in cache — resolve to host URLs only at display time.
  */
 function sanitizeNotificationImageFields(
   items: FleetNotification[],
@@ -135,9 +189,9 @@ function sanitizeNotificationImageFields(
     if (next.data?.image && isBrokenMediaRouteUrl(next.data.image)) {
       delete next.data.image;
     }
-    // Prefer a usable relative uploads path still sitting in data.
+    // Prefer a usable uploads path still sitting in data — store raw, not absolute.
     if (!next.image && next.data?.image && !isBrokenMediaRouteUrl(next.data.image)) {
-      next.image = resolveNotificationImageUrl(next.data.image) ?? next.data.image;
+      next.image = next.data.image;
     }
     return next;
   });
@@ -420,10 +474,13 @@ export function fleetNotificationFromTrayPayload(input: {
   data?: Record<string, unknown> | null;
 }): FleetNotification {
   const data = sanitizeRemoteNotificationData(input.data);
-  const image =
-    resolveNotificationImageUrl(
-      data.image ?? data.imageUrl ?? data.picture ?? '',
-    ) ?? undefined;
+  // Keep raw path — resolve + mount rewrite happens only when rendering.
+  const rawImage = String(
+    data.image ?? data.imageUrl ?? data.picture ?? data.photo ?? '',
+  ).trim();
+  const image = rawImage && !isBrokenMediaRouteUrl(rawImage) && !isEmptyImageValue(rawImage)
+    ? rawImage
+    : undefined;
   const scheduledAt = data.scheduledAt ?? null;
   const expiresAt = data.expiresAt ?? null;
 
@@ -467,10 +524,13 @@ export function mapRemoteMessageToNotification(
   );
 
   // FCM payloads may send image under several keys used by admin / web push.
+  // Store the raw value so inbox rendering can rewrite /uploads/notification → /uploads.
   const rawImage = String(
     data.image ?? data.imageUrl ?? data.picture ?? data.photo ?? '',
   ).trim();
-  const image = rawImage ? resolveNotificationImageUrl(rawImage) ?? undefined : undefined;
+  const image = rawImage && !isBrokenMediaRouteUrl(rawImage) && !isEmptyImageValue(rawImage)
+    ? rawImage
+    : undefined;
 
   const scheduledAt = data.scheduledAt ?? null;
   const expiresAt = data.expiresAt ?? null;

@@ -19,7 +19,6 @@ import {
   markAllNotificationsRead,
   markNotificationRead,
   removeNotification,
-  resolveNotificationImageUrl,
 } from '../../../services/notifications/notificationCenter';
 import { notificationEvents } from '../../../services/notifications/notificationEvents';
 import { notificationApi } from '../../../services/api/notificationApi';
@@ -258,8 +257,8 @@ export default function NotificationsScreen() {
 
     // Unread = darker card; opened = lighter card. No press opacity fade.
     const isUnread = !item.read || isConditionBasedDashboardRow(item);
-    // Web NotificationDrawer.resolveImageUrl — single absolute URL, no fallback chain.
-    const imageUrl = resolveNotificationImageUrl(item.image ?? item.data?.image);
+    // Pass raw path — NotificationImagePreview rewrites /uploads/notification → /uploads + retries.
+    const rawImage = item.image ?? item.data?.image;
 
     return (
       <Pressable
@@ -324,9 +323,9 @@ export default function NotificationsScreen() {
           ) : (
             <Text style={styles.body}>{displayText}</Text>
           )}
-          {imageUrl ? (
+          {rawImage ? (
             <NotificationImagePreview
-              uri={imageUrl}
+              image={rawImage}
               title={item.title}
               height={220}
             />
