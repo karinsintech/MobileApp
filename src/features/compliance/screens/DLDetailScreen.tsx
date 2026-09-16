@@ -1,23 +1,24 @@
 /**
  * SARATHI licence detail — mirrors the web DrivingLicense eye-icon modal:
- * licence summary, endorsement, validity periods and COV table.
- * Biometric photo is never rendered (DPDP Restricted — stripped client-side).
+ * licence summary, face photo, endorsement, validity periods and COV table.
+ *
+ * Always loads GET /driverLicense/:id so biPhoto is present (list /all omits it).
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
 } from 'react-native';
 import { complianceApi } from '../../../services/api/complianceApi';
 import {
-  LiquidBackground, GlassCard, SkeletonCard, ScreenHeader,
+  LiquidBackground, GlassCard, SkeletonCard, ScreenHeader, AppImage,
 } from '../../../components';
 import { Colors, FontSize, Spacing, Radius } from '../../../theme';
 import { fmtDate } from '../../../utils/format';
 import { maskDlNumber, redactRedPii } from '../../../utils/piiProtection';
 import { useAppSelector } from '../../../store';
 import { resolveDriverFullName } from '../utils/driverNameUtils';
-import { sanitizeDlPayload } from '../utils/sanitizeDlPayload';
+import { sanitizeDlPayload, toDlPhotoSrc } from '../utils/sanitizeDlPayload';
 import type { DLDetailPayload } from '../types/dlDetail';
 
 function DetailRow({ label, value }: { label: string; value?: string | null }) {
@@ -49,41 +50,55 @@ export default function DLDetailScreen({ route }: any) {
   const passedDriverName: string | undefined = route.params.driverName;
   const { user } = useAppSelector((s) => s.auth);
 
-  // Sanitize any detail that arrived via navigation so biometrics never sit in state.
+  // Seed from list-row payload while the detail API (which includes biPhoto) loads.
   const [detail, setDetail] = useState<DLDetailPayload | null>(
     passedDetail ? sanitizeDlPayload(passedDetail) : null,
   );
-  const [loading, setLoading] = useState(!passedDetail);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(false);
     try {
+      // Web handleViewLicenseDetail — list omits fullResponse; detail API has biPhoto.
       const { data } = await complianceApi.getDLById(dlId);
-      const payload = (data as any)?.result ?? data;
-      if (payload && typeof payload === 'object') setDetail(sanitizeDlPayload(payload));
-      else setError(true);
+      // Backend may wrap as { result }, { data: { result } }, or the licence object itself.
+      const payload =
+        (data as any)?.result
+        ?? (data as any)?.data?.result
+        ?? (data as any)?.data
+        ?? data;
+      if (payload && typeof payload === 'object') {
+        setDetail(sanitizeDlPayload(payload));
+      } else if (!passedDetail) {
+        setError(true);
+      }
     } catch {
-      setError(true);
+      // Keep list summary on screen if detail fetch fails (web warning parity).
+      if (!passedDetail) setError(true);
     } finally {
       setLoading(false);
     }
-  }, [dlId]);
+  }, [dlId, passedDetail]);
 
   useEffect(() => {
-    if (!passedDetail) fetchData();
-  }, [fetchData, passedDetail]);
+    fetchData();
+  }, [fetchData]);
 
   const lic = detail?.licenseDetails;
   const driverFullName = resolveDriverFullName(detail, passedDriverName);
   const displayDlNo = redactRedPii(lic?.dlLicno, user?.roleKey, maskDlNumber);
+  const photoSrc = useMemo(
+    () => toDlPhotoSrc(detail?.bioImageDetails?.biPhoto),
+    [detail?.bioImageDetails?.biPhoto],
+  );
 
   return (
     <LiquidBackground>
       <ScreenHeader title="Driving License Details" showBack />
 
-      {loading ? (
+      {loading && !detail ? (
         <View style={styles.loadingWrap}>
           {[1, 2, 3].map((i) => <SkeletonCard key={i} />)}
         </View>
@@ -109,6 +124,16 @@ export default function DLDetailScreen({ route }: any) {
                   value={lic?.omRtoFullname || lic?.olaName}
                 />
               </View>
+              {/* Web View modal places biPhoto to the right of the licence summary. */}
+              {photoSrc ? (
+                <View style={styles.photoWrap}>
+                  <AppImage
+                    source={{ uri: photoSrc }}
+                    style={styles.photo}
+                    resizeMode="cover"
+                  />
+                </View>
+              ) : null}
             </View>
           </GlassCard>
 
@@ -179,8 +204,21 @@ const styles = StyleSheet.create({
     color: Colors.infoLight,
     marginBottom: Spacing[3],
   },
-  summaryRow: { flexDirection: 'row', gap: 12 },
-  summaryCol: { flex: 1, gap: 8 },
+  summaryRow: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
+  summaryCol: { flex: 1, gap: 8, minWidth: 0 },
+  photoWrap: {
+    width: 115,
+    flexShrink: 0,
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: Colors.glass.border,
+    backgroundColor: Colors.glass.bgDark,
+  },
+  photo: {
+    width: 115,
+    height: 140,
+  },
   detailRow: { gap: 2 },
   detailLabel: { fontSize: FontSize.xs, color: Colors.text.label, fontWeight: '600' },
   detailValue: { fontSize: FontSize.sm, color: Colors.white, fontWeight: '600' },

@@ -53,10 +53,13 @@ export function AppImage({
   ...rest
 }: AppImageProps) {
   // Bundled require() assets stay on RN Image — Glide's strength is URI loads.
-  if (useRnFallback || !isRemoteOrDataUri(source)) {
+  // Large Sarathi face photos are data:image base64; FastImage/Glide often fails
+  // on those, so keep data URIs on RN Image as well.
+  const isDataUri = isRemoteOrDataUri(source) && source.uri.startsWith('data:');
+  if (useRnFallback || isDataUri || !isRemoteOrDataUri(source)) {
     return (
       <RNImage
-        source={source as ImageRequireSource}
+        source={source as ImageRequireSource | { uri: string }}
         style={style as StyleProp<RNImageStyle>}
         resizeMode={resizeMode}
       />

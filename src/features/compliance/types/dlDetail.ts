@@ -29,9 +29,12 @@ export interface DLDetailPayload {
     bioLastName?: string;
   };
   /**
-   * Intentionally omitted from the client type: biPhoto / signatures / fingerprints
-   * are Restricted and must never be held in React state (see sanitizeDlPayload).
+   * Face photo only (web View modal). Fingerprints / signature are stripped
+   * by sanitizeDlPayload and never held in React state.
    */
+  bioImageDetails?: {
+    biPhoto?: string;
+  };
   serviceHistory?: Array<{ trName?: string }>;
   authorizedVehicles?: Array<{
     vecatg?: string;

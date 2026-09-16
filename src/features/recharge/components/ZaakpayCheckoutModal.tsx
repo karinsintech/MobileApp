@@ -2,22 +2,54 @@
  * In-app Zaakpay checkout — intercepts the existing /status webhook redirect:
  * `${FRONTEND_URL}/transaction/recharge/?orderId=...&rechargeStatus=...`
  * Backend is unchanged; WebView catches this URL before the web SPA loads.
+ *
+ * The whole gateway journey (card / netbanking / 3DS / bank pages) must stay in
+ * this modal: once a page escapes to the system browser the app never sees the
+ * return URL, so the recharge silently ends without a status screen.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Modal, View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Platform,
+  Alert, Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { WebView, type WebViewNavigation } from 'react-native-webview';
+import { WebView } from 'react-native-webview';
+import type {
+  WebViewNavigation,
+  WebViewOpenWindowEvent,
+  ShouldStartLoadRequest,
+} from 'react-native-webview/lib/WebViewTypes';
 import { Colors, FontSize, Spacing } from '../../../theme';
 import type { RechargeStartedPayload } from '../types/rechargeTypes';
 import { parseRechargeReturnUrl } from '../utils/parseRechargeReturnUrl';
+
+const WEB_URL_PATTERN = /^https?:\/\//i;
+
+/**
+ * Schemes no WebView can render — UPI / wallet apps own these. Anything outside
+ * this list is dropped rather than forwarded to the OS, which is what used to
+ * bounce checkout into Chrome/Safari.
+ */
+const PAYMENT_APP_SCHEMES = new Set([
+  'upi', 'intent', 'tez', 'gpay', 'bhim', 'phonepe', 'paytm', 'paytmmp',
+  'credpay', 'amazonpay', 'myairtelupi', 'mobikwik', 'freecharge',
+]);
 
 interface ZaakpayCheckoutModalProps {
   checkoutUrl: string | null;
   onComplete: (payload: RechargeStartedPayload) => void;
   onClose: () => void;
+}
+
+/** Hands a UPI/wallet deep link to the installed app, warning when none exists. */
+function launchPaymentApp(url: string) {
+  Linking.openURL(url).catch(() => {
+    Alert.alert(
+      'Payment app not available',
+      'The selected app is not installed. Choose another payment method to continue.',
+    );
+  });
 }
 
 export default function ZaakpayCheckoutModal({
@@ -28,10 +60,13 @@ export default function ZaakpayCheckoutModal({
   const insets = useSafeAreaInsets();
   const completedRef = useRef(false);
   const [isPageLoading, setIsPageLoading] = useState(true);
+  // Popup (target=_blank / window.open) target re-hosted in this same WebView.
+  const [popupUrl, setPopupUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (checkoutUrl) {
       completedRef.current = false;
+      setPopupUrl(null);
       setIsPageLoading(true);
     }
   }, [checkoutUrl]);
@@ -49,6 +84,46 @@ export default function ZaakpayCheckoutModal({
 
   const onNavigationStateChange = useCallback((event: WebViewNavigation) => {
     handleReturnUrl(event.url);
+  }, [handleReturnUrl]);
+
+  const handleShouldStartLoad = useCallback((request: ShouldStartLoadRequest) => {
+    const { url, isTopFrame } = request;
+
+    // Return URL closes checkout before the web SPA renders inside the modal.
+    if (handleReturnUrl(url)) return false;
+
+    // Every gateway/bank page loads here, including plain-http redirects that
+    // the origin whitelist would otherwise push out to the system browser.
+    // about:blank is the target of 3DS form posts, so it must load too.
+    if (WEB_URL_PATTERN.test(url) || url.startsWith('about:')) return true;
+
+    const scheme = url.split(':')[0]?.toLowerCase() ?? '';
+    if (PAYMENT_APP_SCHEMES.has(scheme)) {
+      launchPaymentApp(url);
+      return false;
+    }
+
+    // Sub-frame requests cannot navigate the modal away, so gateway iframes and
+    // trackers stay allowed; only unknown top-level schemes are dropped, since
+    // leaving the app mid-payment strands the txn with no status callback.
+    return isTopFrame === false;
+  }, [handleReturnUrl]);
+
+  const handleOpenWindow = useCallback((event: WebViewOpenWindowEvent) => {
+    const { targetUrl } = event.nativeEvent;
+    if (!targetUrl || handleReturnUrl(targetUrl)) return;
+
+    // No second WebView exists for popups, so the target is re-hosted here —
+    // otherwise the OS opens it in Chrome/Safari and the payment leaves the app.
+    if (WEB_URL_PATTERN.test(targetUrl)) {
+      setIsPageLoading(true);
+      setPopupUrl(targetUrl);
+      return;
+    }
+
+    if (PAYMENT_APP_SCHEMES.has(targetUrl.split(':')[0]?.toLowerCase() ?? '')) {
+      launchPaymentApp(targetUrl);
+    }
   }, [handleReturnUrl]);
 
   const visible = !!checkoutUrl;
@@ -71,15 +146,27 @@ export default function ZaakpayCheckoutModal({
 
         {checkoutUrl ? (
           <WebView
-            source={{ uri: checkoutUrl }}
+            // Remount on popup hand-off so the gateway page reloads in-place.
+            key={popupUrl ?? checkoutUrl}
+            source={{ uri: popupUrl ?? checkoutUrl }}
             style={styles.webview}
-            originWhitelist={['https://*']}
+            // '*' disables the library's Linking fallback: off-whitelist URLs are
+            // handed to the OS browser, which broke the in-app payment flow.
+            // handleShouldStartLoad is the single gate for what may load instead.
+            originWhitelist={['*']}
             onLoadStart={(event) => handleReturnUrl(event.nativeEvent.url)}
             onLoadEnd={() => setIsPageLoading(false)}
+            // Without these the spinner would cover a failed gateway page forever.
+            onError={() => setIsPageLoading(false)}
+            onHttpError={() => setIsPageLoading(false)}
             onNavigationStateChange={onNavigationStateChange}
-            onShouldStartLoadWithRequest={(request) => !handleReturnUrl(request.url)}
-            setSupportMultipleWindows={false}
+            onShouldStartLoadWithRequest={handleShouldStartLoad}
+            // Android must allow the popup window so onOpenWindow can capture the
+            // target URL; handleOpenWindow then loads it in this same WebView.
+            setSupportMultipleWindows={Platform.OS === 'android'}
+            onOpenWindow={handleOpenWindow}
             javaScriptEnabled
+            javaScriptCanOpenWindowsAutomatically
             domStorageEnabled
             sharedCookiesEnabled
             thirdPartyCookiesEnabled={Platform.OS === 'android'}

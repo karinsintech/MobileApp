@@ -265,7 +265,14 @@ export default function WalletRechargeTab({
 
       <Text style={styles.sectionLabel}>AMOUNT</Text>
       <GlassCard style={styles.amountCard}>
-        <View style={styles.amountInputRow}>
+        <View
+          style={[
+            styles.amountInputRow,
+            // Border tone doubles as validation feedback once the user types.
+            amount.trim() !== ''
+              && (isAmountValid ? styles.amountInputRowValid : styles.amountInputRowInvalid),
+          ]}
+        >
           <Text style={styles.rupee}>₹</Text>
           <TextInput
             style={styles.amountInput}
@@ -418,9 +425,22 @@ const styles = StyleSheet.create({
   detailRow: { fontSize: FontSize.sm, color: Colors.white },
   detailLabel: { fontWeight: '700', color: Colors.text.secondary },
   amountCard: { paddingVertical: Spacing[4] },
-  amountInputRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: Spacing[4] },
-  rupee: { fontSize: 32, fontWeight: '700', color: Colors.text.subtle },
-  amountInput: { flex: 1, fontSize: 36, fontWeight: '800', color: Colors.white, padding: 0 },
+  amountInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: Spacing[4],
+    borderWidth: 1,
+    borderColor: Colors.glass.border,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.glass.bg,
+    paddingHorizontal: Spacing[3],
+    paddingVertical: Spacing[2],
+  },
+  amountInputRowValid: { borderColor: Colors.successBorder },
+  amountInputRowInvalid: { borderColor: Colors.dangerBorder },
+  rupee: { fontSize: 28, fontWeight: '700', color: Colors.text.subtle },
+  amountInput: { flex: 1, fontSize: 30, fontWeight: '800', color: Colors.white, padding: 0 },
   amountHint: { fontSize: FontSize.lg, fontWeight: '800' },
   amountValid: { color: Colors.successLight },
   amountInvalid: { color: Colors.dangerLight },
