@@ -1,10 +1,24 @@
 import axios, { AxiosInstance, AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios';
+import { Platform } from 'react-native';
 import { API_BASE_URL } from '../../config/env';
 import { SecureStorage } from '../storage/SecureStorage';
 
 // fleet.karins.in serves the web SPA (nginx returns 405 on POST); API is api.karins.in.
 const BASE_URL = API_BASE_URL;
 const TIMEOUT_MS = 20_000;
+
+/**
+ * Headers that identify this client for security_audit_log.
+ * X-App-Platform = product surface (mobile vs portal).
+ * X-Device-Platform = OS — required because axios UA has no Android/iOS tokens.
+ */
+const MOBILE_CLIENT_HEADERS = {
+  'Content-Type': 'application/json',
+  'X-App-Platform': 'mobile',
+  'X-Device-Platform': Platform.OS === 'ios' ? 'ios' : 'android',
+  'X-App-Version':
+    (typeof process !== 'undefined' && process.env?.KARINS_APP_VERSION) || '2.1.6',
+} as const;
 
 // Queue of requests waiting for token refresh
 let isRefreshing = false;
@@ -48,12 +62,7 @@ export const apiClient: AxiosInstance = axios.create({
   timeout: TIMEOUT_MS,
   // Cookies are optional for Bearer login; false avoids rare iOS cookie-jar failures on cloud simulators.
   withCredentials: false,
-  headers: {
-    'Content-Type': 'application/json',
-    'X-App-Platform': 'mobile',
-    'X-App-Version':
-      (typeof process !== 'undefined' && process.env?.KARINS_APP_VERSION) || '2.1.6',
-  },
+  headers: { ...MOBILE_CLIENT_HEADERS },
 });
 
 // Routes that must not carry a stale Bearer token (e.g. after logout).
@@ -124,12 +133,7 @@ async function refreshAccessTokenWithBearer(): Promise<string | null> {
       { accessToken: existingToken },
       {
         timeout: TIMEOUT_MS,
-        headers: {
-          'Content-Type': 'application/json',
-          'X-App-Platform': 'mobile',
-          'X-App-Version':
-      (typeof process !== 'undefined' && process.env?.KARINS_APP_VERSION) || '2.1.6',
-        },
+        headers: { ...MOBILE_CLIENT_HEADERS },
       },
     );
     return res.data.accessToken ?? null;
