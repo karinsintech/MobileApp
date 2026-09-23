@@ -3,9 +3,9 @@
  * biometric / app-lock PIN re-entry only after idle timeout (MM-01).
  *
  * Mounted only while authenticated so login screens stay usable.
- * After idle, fingerprint is prompted automatically (no intermediate Unlock
- * screen). Sign in offers App lock (PIN pad) and Password (same device-local
- * app-lock PIN — never the account PIN, phone passcode, or login password).
+ * Unlock options (fingerprint, PIN, password) are shown together on one
+ * screen — no nested "Sign in" alert. PIN and password both verify the
+ * device-local app-lock PIN (never account PIN or phone passcode).
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -18,7 +18,6 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-  Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAppSelector } from '../../store';
@@ -36,9 +35,9 @@ import {
   hasAppLockPin,
   verifyAppLockPin as verifyDeviceAppLockPin,
 } from '../../services/auth/appLockPinService';
-import { PinEntryModal } from '../profile/components/PinEntryModal';
 
-type UnlockMethod = 'biometric' | 'password';
+/** Which inline entry field is focused — PIN = dots pad style, Password = visible digits. */
+type PinEntryMode = 'pin' | 'password';
 
 export function SessionPrivacyGate() {
   const insets = useSafeAreaInsets();
@@ -49,17 +48,14 @@ export function SessionPrivacyGate() {
   const [unlockError, setUnlockError] = useState<string | null>(null);
 
   const [biometryAvailable, setBiometryAvailable] = useState(false);
-  const [unlockMethod, setUnlockMethod] = useState<UnlockMethod>('biometric');
+  const [pinAvailable, setPinAvailable] = useState(false);
 
-  const [password, setPassword] = useState('');
-  const [passwordError, setPasswordError] = useState<string | null>(null);
-  const [isPasswordUnlocking, setIsPasswordUnlocking] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-  const passwordInputRef = useRef<TextInput>(null);
-
-  const [showAppLockPin, setShowAppLockPin] = useState(false);
+  const [pin, setPin] = useState('');
   const [pinError, setPinError] = useState<string | null>(null);
   const [isPinUnlocking, setIsPinUnlocking] = useState(false);
+  const [entryMode, setEntryMode] = useState<PinEntryMode>('pin');
+  const [showPasswordDigits, setShowPasswordDigits] = useState(false);
+  const pinInputRef = useRef<TextInput>(null);
 
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   // Refs keep AppState handler from clearing a lock when the biometric sheet
@@ -84,11 +80,10 @@ export function SessionPrivacyGate() {
       needsUnlockRef.current = false;
       hasAutoPromptedRef.current = false;
       setUnlockError(null);
-      setPassword('');
-      setPasswordError(null);
-      setUnlockMethod('biometric');
-      setShowAppLockPin(false);
+      setPin('');
       setPinError(null);
+      setEntryMode('pin');
+      setShowPasswordDigits(false);
       return;
     }
 
@@ -105,7 +100,7 @@ export function SessionPrivacyGate() {
     }
   }, [isAuthenticated]);
 
-  // Prefer fingerprint when enrolled; otherwise land on app-lock password entry.
+  // Resolve which unlock methods exist for this device / install.
   useEffect(() => {
     if (!isAuthenticated || !needsUnlock) return;
 
@@ -114,12 +109,12 @@ export function SessionPrivacyGate() {
       const biometry = await isDeviceBiometryAvailable();
       if (cancelled) return;
       setBiometryAvailable(biometry);
-      setUnlockMethod(biometry ? 'biometric' : 'password');
-      setPassword('');
-      setPasswordError(null);
-      setShowPassword(false);
-      setShowAppLockPin(false);
+      setPinAvailable(hasAppLockPin());
+      setPin('');
       setPinError(null);
+      setUnlockError(null);
+      setEntryMode('pin');
+      setShowPasswordDigits(false);
       // New lock session — allow one automatic fingerprint sheet.
       hasAutoPromptedRef.current = false;
     })();
@@ -130,12 +125,10 @@ export function SessionPrivacyGate() {
   }, [isAuthenticated, needsUnlock]);
 
   useEffect(() => {
-    if (needsUnlock && unlockMethod === 'password') {
-      const t = setTimeout(() => passwordInputRef.current?.focus(), 250);
-      return () => clearTimeout(t);
-    }
-    return undefined;
-  }, [needsUnlock, unlockMethod]);
+    if (!needsUnlock || !pinAvailable) return;
+    const t = setTimeout(() => pinInputRef.current?.focus(), 280);
+    return () => clearTimeout(t);
+  }, [needsUnlock, pinAvailable, entryMode]);
 
   const clearLock = useCallback(() => {
     clearSessionLeftAt();
@@ -144,13 +137,11 @@ export function SessionPrivacyGate() {
     setNeedsUnlock(false);
     setIsCovered(false);
     setUnlockError(null);
-    setPassword('');
-    setPasswordError(null);
-    setShowAppLockPin(false);
+    setPin('');
     setPinError(null);
   }, []);
 
-  const tryUnlock = useCallback(async () => {
+  const tryFingerprint = useCallback(async () => {
     if (isUnlockingRef.current) return;
     isUnlockingRef.current = true;
     setIsUnlocking(true);
@@ -160,11 +151,10 @@ export function SessionPrivacyGate() {
       if (result.ok) {
         clearLock();
       } else if (result.reason === 'no_biometry' || result.reason === 'fallback_unavailable') {
-        // No usable fingerprint — fall through to app-lock password.
         setBiometryAvailable(false);
-        setUnlockMethod('password');
+        setUnlockError('Fingerprint unavailable. Use PIN or password below.');
       } else if (result.reason !== 'cancelled') {
-        setUnlockError('Authentication failed. Try Sign in for App lock or password.');
+        setUnlockError('Fingerprint failed. Try again or use PIN / password.');
       }
     } finally {
       isUnlockingRef.current = false;
@@ -172,93 +162,39 @@ export function SessionPrivacyGate() {
     }
   }, [clearLock]);
 
-  // Idle lock → show the OS fingerprint sheet immediately (no Unlock tap).
+  // Idle lock → auto-open fingerprint once when available (PIN stays visible underneath).
   useEffect(() => {
-    if (!needsUnlock || !biometryAvailable || unlockMethod !== 'biometric') return;
+    if (!needsUnlock || !biometryAvailable) return;
     if (hasAutoPromptedRef.current || isUnlockingRef.current) return;
     hasAutoPromptedRef.current = true;
-    void tryUnlock();
-  }, [needsUnlock, biometryAvailable, unlockMethod, tryUnlock]);
+    void tryFingerprint();
+  }, [needsUnlock, biometryAvailable, tryFingerprint]);
 
   /** Unlocks with the device app-lock PIN — never account PIN or phone password. */
-  const verifyAppLockPin = useCallback(
-    (pin: string): boolean => {
+  const submitAppLockPin = useCallback(
+    (value: string) => {
       if (!hasAppLockPin()) {
-        const msg = 'No app lock PIN set. Set one in Profile → Security.';
-        setPasswordError(msg);
-        setPinError(msg);
-        return false;
+        setPinError('No app lock PIN set. Set one in Profile → Security.');
+        return;
       }
-      const result = verifyDeviceAppLockPin(pin);
-      if (!result.ok) {
-        setPasswordError(result.message);
-        setPinError(result.message);
-        return false;
-      }
-      clearLock();
-      return true;
-    },
-    [clearLock],
-  );
-
-  const handlePasswordUnlock = useCallback(async () => {
-    setIsPasswordUnlocking(true);
-    setPasswordError(null);
-    try {
-      const ok = verifyAppLockPin(password.trim());
-      if (!ok) setPassword('');
-    } finally {
-      setIsPasswordUnlocking(false);
-    }
-  }, [password, verifyAppLockPin]);
-
-  const handleAppLockPinSubmit = useCallback(
-    (pin: string) => {
       setIsPinUnlocking(true);
       setPinError(null);
       try {
-        verifyAppLockPin(pin);
+        const result = verifyDeviceAppLockPin(value);
+        if (!result.ok) {
+          setPinError(result.message);
+          setPin('');
+          return;
+        }
+        clearLock();
       } finally {
         setIsPinUnlocking(false);
       }
     },
-    [verifyAppLockPin],
+    [clearLock],
   );
 
-  const handleSignInOptions = useCallback(() => {
-    if (!hasAppLockPin()) {
-      Alert.alert(
-        'App lock PIN required',
-        'Set an app lock PIN in Profile → Security before using Sign in unlock options.',
-      );
-      return;
-    }
-
-    Alert.alert('Sign in', 'Choose how to unlock your session', [
-      {
-        text: 'App lock',
-        onPress: () => {
-          setPassword('');
-          setPasswordError(null);
-          setUnlockError(null);
-          setPinError(null);
-          setShowAppLockPin(true);
-        },
-      },
-      {
-        text: 'Password',
-        onPress: () => {
-          setUnlockMethod('password');
-          setShowAppLockPin(false);
-          setPassword('');
-          setPasswordError(null);
-          setUnlockError(null);
-          setPinError(null);
-        },
-      },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
-  }, []);
+  const canSubmitPin = pin.trim().length === 4 && !isPinUnlocking;
 
   useEffect(() => {
     if (!isAuthenticated) return undefined;
@@ -308,9 +244,7 @@ export function SessionPrivacyGate() {
 
   if (!isAuthenticated || !isCovered) return null;
 
-  const showPasswordEntry = needsUnlock && unlockMethod === 'password';
-  const showBiometricCover = needsUnlock && unlockMethod === 'biometric';
-  const canSubmitPassword = password.trim().length === 4 && !isPasswordUnlocking;
+  const busy = isUnlocking || isPinUnlocking;
 
   return (
     <View
@@ -319,116 +253,164 @@ export function SessionPrivacyGate() {
       accessibilityViewIsModal
       accessibilityLabel="Session locked"
     >
-      <View style={[styles.inner, { paddingTop: insets.top + 48, paddingBottom: insets.bottom + 24 }]}>
+      <View style={[styles.inner, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 24 }]}>
         {!needsUnlock ? (
           <>
             <Text style={styles.brandKarins}>Karins</Text>
             <Text style={styles.brandFleet}>fleet</Text>
             <Text style={styles.subtitle}>Securing your session</Text>
           </>
-        ) : showPasswordEntry ? (
-          <View style={styles.passwordPanel}>
-            <Text style={styles.lockIcon} accessibilityLabel="App lock password">🔒</Text>
-            <Text style={styles.passwordTitle}>Enter app lock password</Text>
-            <Text style={styles.passwordHint}>Use your 4-digit app lock PIN</Text>
-            <View style={[styles.passwordRow, passwordError ? styles.passwordRowError : null]}>
-              <TextInput
-                ref={passwordInputRef}
-                style={styles.passwordInput}
-                value={password}
-                onChangeText={(value) => {
-                  // App lock password is the 4-digit PIN — strip non-digits.
-                  const digits = value.replace(/\D/g, '').slice(0, 4);
-                  setPassword(digits);
-                  setPasswordError(null);
-                }}
-                secureTextEntry={!showPassword}
-                editable={!isPasswordUnlocking}
-                placeholder="••••"
-                placeholderTextColor="rgba(255,255,255,0.45)"
-                keyboardType="number-pad"
-                maxLength={4}
-                autoCapitalize="none"
-                autoCorrect={false}
-                textContentType="none"
-                importantForAutofill="no"
-                onSubmitEditing={() => {
-                  if (canSubmitPassword) void handlePasswordUnlock();
-                }}
-              />
-              <TouchableOpacity
-                onPress={() => setShowPassword((v) => !v)}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                style={styles.eyeBtn}
-              >
-                <Text style={styles.eyeIcon}>{showPassword ? '🙈' : '👁'}</Text>
-              </TouchableOpacity>
-            </View>
-            {passwordError ? <Text style={styles.error}>{passwordError}</Text> : null}
-            <TouchableOpacity
-              style={[styles.unlockBtn, !canSubmitPassword && styles.unlockBtnDisabled]}
-              onPress={() => { void handlePasswordUnlock(); }}
-              disabled={!canSubmitPassword}
-              activeOpacity={0.85}
-            >
-              {isPasswordUnlocking ? (
-                <ActivityIndicator color={Colors.navy} />
-              ) : (
-                <Text style={styles.unlockText}>Continue</Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        ) : showBiometricCover ? (
-          <>
+        ) : (
+          <View style={styles.unlockPanel}>
             <Text style={styles.brandKarins}>Karins</Text>
             <Text style={styles.brandFleet}>fleet</Text>
-            <Text style={styles.subtitle}>
-              {isUnlocking
-                ? 'Waiting for fingerprint…'
-                : 'Session locked — use fingerprint or Sign in'}
-            </Text>
-            {/* Tap brand area to re-open the fingerprint sheet after cancel. */}
-            {!isUnlocking ? (
-              <TouchableOpacity
-                style={styles.fingerprintRetry}
-                onPress={() => { void tryUnlock(); }}
-                disabled={isPasswordUnlocking || isPinUnlocking}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.fingerprintRetryText}>Use fingerprint</Text>
-              </TouchableOpacity>
-            ) : (
-              <ActivityIndicator color={Colors.yellow} style={styles.spinner} />
-            )}
+            <Text style={styles.subtitle}>Session locked — unlock to continue</Text>
+
+            {/* All unlock methods on one screen (no Sign-in alert). */}
+            <View style={styles.methodRow}>
+              {biometryAvailable ? (
+                <TouchableOpacity
+                  style={[styles.methodChip, isUnlocking && styles.methodChipActive]}
+                  onPress={() => { void tryFingerprint(); }}
+                  disabled={busy}
+                  activeOpacity={0.85}
+                  accessibilityLabel="Unlock with fingerprint"
+                >
+                  {isUnlocking ? (
+                    <ActivityIndicator color={Colors.navy} />
+                  ) : (
+                    <>
+                      <Text style={styles.methodIcon}>👆</Text>
+                      <Text
+                        style={[
+                          styles.methodLabel,
+                          isUnlocking && styles.methodLabelActive,
+                        ]}
+                      >
+                        Fingerprint
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              ) : null}
+
+              {pinAvailable ? (
+                <>
+                  <TouchableOpacity
+                    style={[styles.methodChip, entryMode === 'pin' && styles.methodChipActive]}
+                    onPress={() => {
+                      setEntryMode('pin');
+                      setPin('');
+                      setPinError(null);
+                      setShowPasswordDigits(false);
+                    }}
+                    disabled={busy}
+                    activeOpacity={0.85}
+                    accessibilityLabel="Unlock with PIN"
+                  >
+                    <Text style={styles.methodIcon}>🔢</Text>
+                    <Text
+                      style={[
+                        styles.methodLabel,
+                        entryMode === 'pin' && styles.methodLabelActive,
+                      ]}
+                    >
+                      PIN
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.methodChip, entryMode === 'password' && styles.methodChipActive]}
+                    onPress={() => {
+                      setEntryMode('password');
+                      setPin('');
+                      setPinError(null);
+                    }}
+                    disabled={busy}
+                    activeOpacity={0.85}
+                    accessibilityLabel="Unlock with password"
+                  >
+                    <Text style={styles.methodIcon}>🔑</Text>
+                    <Text
+                      style={[
+                        styles.methodLabel,
+                        entryMode === 'password' && styles.methodLabelActive,
+                      ]}
+                    >
+                      Password
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              ) : null}
+            </View>
+
             {unlockError ? <Text style={styles.error}>{unlockError}</Text> : null}
-          </>
-        ) : null}
 
-        {needsUnlock ? (
-          <TouchableOpacity
-            style={styles.signInOptionsBtn}
-            onPress={handleSignInOptions}
-            disabled={isUnlocking || isPasswordUnlocking || isPinUnlocking}
-            activeOpacity={0.7}
-            hitSlop={{ top: 12, bottom: 12, left: 16, right: 16 }}
-          >
-            <Text style={styles.signInOptionsText}>Sign in</Text>
-          </TouchableOpacity>
-        ) : null}
+            {pinAvailable ? (
+              <View style={styles.pinPanel}>
+                <Text style={styles.pinHint}>
+                  {entryMode === 'pin'
+                    ? 'Enter your 4-digit app lock PIN'
+                    : 'Enter your 4-digit app lock password'}
+                </Text>
+                <View style={[styles.pinRow, pinError ? styles.pinRowError : null]}>
+                  <TextInput
+                    ref={pinInputRef}
+                    style={styles.pinInput}
+                    value={pin}
+                    onChangeText={(value) => {
+                      const digits = value.replace(/\D/g, '').slice(0, 4);
+                      setPin(digits);
+                      setPinError(null);
+                    }}
+                    secureTextEntry={entryMode === 'pin' || !showPasswordDigits}
+                    editable={!isPinUnlocking}
+                    placeholder="••••"
+                    placeholderTextColor="rgba(255,255,255,0.45)"
+                    keyboardType="number-pad"
+                    maxLength={4}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    textContentType="none"
+                    importantForAutofill="no"
+                    onSubmitEditing={() => {
+                      if (canSubmitPin) submitAppLockPin(pin.trim());
+                    }}
+                  />
+                  {entryMode === 'password' ? (
+                    <TouchableOpacity
+                      onPress={() => setShowPasswordDigits((v) => !v)}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      style={styles.eyeBtn}
+                    >
+                      <Text style={styles.eyeIcon}>{showPasswordDigits ? '🙈' : '👁'}</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+                {pinError ? <Text style={styles.error}>{pinError}</Text> : null}
+                <TouchableOpacity
+                  style={[styles.unlockBtn, !canSubmitPin && styles.unlockBtnDisabled]}
+                  onPress={() => submitAppLockPin(pin.trim())}
+                  disabled={!canSubmitPin}
+                  activeOpacity={0.85}
+                >
+                  {isPinUnlocking ? (
+                    <ActivityIndicator color={Colors.navy} />
+                  ) : (
+                    <Text style={styles.unlockText}>Unlock</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <Text style={styles.noPinHint}>
+                {biometryAvailable
+                  ? 'Use fingerprint above, or set an app lock PIN in Profile → Security.'
+                  : 'Set an app lock PIN in Profile → Security to unlock after idle.'}
+              </Text>
+            )}
+          </View>
+        )}
       </View>
-
-      <PinEntryModal
-        visible={showAppLockPin}
-        title="App lock"
-        subtitle="Enter your 4-digit app lock PIN"
-        error={pinError}
-        isLoading={isPinUnlocking}
-        onCancel={() => {
-          setShowAppLockPin(false);
-          setPinError(null);
-        }}
-        onSubmit={handleAppLockPinSubmit}
-      />
     </View>
   );
 }
@@ -446,6 +428,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: Spacing[6],
   },
+  unlockPanel: {
+    width: '100%',
+    maxWidth: 340,
+    alignItems: 'center',
+  },
   brandKarins: {
     fontFamily: FontFamily.logo,
     fontSize: 40,
@@ -457,49 +444,61 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: Colors.white,
     marginTop: 4,
-    marginBottom: Spacing[4],
+    marginBottom: Spacing[3],
   },
   subtitle: {
     fontSize: FontSize.base,
     color: 'rgba(255,255,255,0.85)',
     textAlign: 'center',
-    marginBottom: Spacing[6],
+    marginBottom: Spacing[5],
   },
-  spinner: {
+  methodRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: Spacing[2],
     marginBottom: Spacing[4],
-  },
-  fingerprintRetry: {
-    paddingVertical: Spacing[3],
-    paddingHorizontal: Spacing[4],
-    marginBottom: Spacing[2],
-  },
-  fingerprintRetryText: {
-    fontSize: FontSize.base,
-    fontWeight: '600',
-    color: Colors.yellow,
-  },
-  passwordPanel: {
     width: '100%',
-    maxWidth: 300,
+  },
+  methodChip: {
+    minWidth: 96,
+    paddingVertical: Spacing[3],
+    paddingHorizontal: Spacing[3],
+    borderRadius: Radius.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
+    backgroundColor: 'rgba(255,255,255,0.08)',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
   },
-  lockIcon: {
-    fontSize: 36,
-    marginBottom: Spacing[4],
+  methodChipActive: {
+    borderColor: Colors.yellow,
+    backgroundColor: Colors.yellow,
   },
-  passwordTitle: {
-    fontSize: FontSize.xl,
-    fontWeight: '600',
+  methodIcon: {
+    fontSize: 18,
+  },
+  methodLabel: {
+    fontSize: FontSize.sm,
+    fontWeight: '700',
     color: Colors.white,
-    marginBottom: Spacing[2],
-    textAlign: 'center',
   },
-  passwordHint: {
+  methodLabelActive: {
+    color: Colors.navy,
+  },
+  pinPanel: {
+    width: '100%',
+    alignItems: 'center',
+    marginTop: Spacing[2],
+  },
+  pinHint: {
     fontSize: FontSize.sm,
     color: 'rgba(255,255,255,0.7)',
-    marginBottom: Spacing[4],
+    marginBottom: Spacing[3],
+    textAlign: 'center',
   },
-  passwordRow: {
+  pinRow: {
     width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
@@ -510,10 +509,10 @@ const styles = StyleSheet.create({
     marginBottom: Spacing[3],
     paddingRight: Spacing[3],
   },
-  passwordRowError: {
+  pinRowError: {
     borderColor: Colors.dangerLight,
   },
-  passwordInput: {
+  pinInput: {
     flex: 1,
     fontSize: FontSize.base,
     fontWeight: '600',
@@ -545,15 +544,12 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: Colors.navy,
   },
-  signInOptionsBtn: {
-    marginTop: Spacing[8],
-    paddingVertical: Spacing[2],
-  },
-  signInOptionsText: {
-    fontSize: FontSize.base,
-    color: 'rgba(255,255,255,0.9)',
-    fontWeight: '500',
-    textDecorationLine: 'underline',
+  noPinHint: {
+    fontSize: FontSize.sm,
+    color: 'rgba(255,255,255,0.75)',
+    textAlign: 'center',
+    marginTop: Spacing[4],
+    lineHeight: 20,
   },
   error: {
     marginTop: Spacing[2],
