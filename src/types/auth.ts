@@ -23,11 +23,9 @@ export interface LoginPayload {
   // Login identifier accepted by the backend; the mobile number is sent here.
   username: string;
   password: string;
-  // deviceId: string;
-  // deviceModel: string;
-  // osVersion: string;
-  // appVersion: string;
-  // fcmToken?: string;
+  // Optional device geolocation for security_audit_log login coords.
+  latitude?: number;
+  longitude?: number;
 }
 
 export interface LoginResponse {
@@ -45,6 +43,9 @@ export interface LoginResponse {
 export interface PinSignInPayload {
   mobileNumber: string;
   pin: string;
+  // Optional device geolocation for security_audit_log login coords.
+  latitude?: number;
+  longitude?: number;
 }
 
 export interface PinStatusResponse {

@@ -17,6 +17,7 @@ import {
 import { switchActiveCustomer } from '../../services/auth/customerSwitch';
 import { ensureDeviceIdPersisted, resolveLogoutDeviceId } from '../../services/auth/deviceIdentity';
 import { signInWithPinLogin, syncPinLoginPreference, enablePinLogin } from '../../services/auth/pinAuthService';
+import { getClientGeoCoords, getLoginAuditGeoCoords } from '../../utils/getClientGeoCoords';
 
 /** Same wording as a bad-credentials failure so restricted roles are not tipped off. */
 const MOBILE_LOGIN_BLOCKED_MESSAGE = 'Username and password is invalid';
@@ -106,7 +107,12 @@ export const signIn = createAsyncThunk<
     invalidateApiSession();
     await SecureStorage.prepareForSignIn();
 
-    const { data } = await authApi.signIn(payload);
+    // Cache-only geo — never await a permission dialog or cold GPS lock here.
+    const geo = await getLoginAuditGeoCoords();
+    const { data } = await authApi.signIn({
+      ...payload,
+      ...(geo || {}),
+    });
 
     if (!data?.accessToken) {
       return rejectWithValue('Sign-in succeeded but no access token was returned.');
@@ -137,12 +143,8 @@ export const signIn = createAsyncThunk<
 
     SecureStorage.setLastLoginMobile(payload.username.trim());
 
-    // PIN preference is best-effort — must not fail an otherwise successful sign-in.
-    try {
-      await syncPinLoginPreference(payload.username.trim());
-    } catch {
-      // Ignore — user can still use password login.
-    }
+    // PIN preference sync is off the critical path — do not delay Sign In success.
+    void syncPinLoginPreference(payload.username.trim()).catch(() => {});
 
     return { user: sessionUser };
   } catch (error: unknown) {
@@ -283,9 +285,12 @@ export const signOut = createAsyncThunk<void, SignOutOptions | undefined>(
     const forgetDevice = options?.forgetDevice === true;
     const deviceId = await resolveLogoutDeviceId();
 
+    // Capture logout coords while session/Bearer is still valid — best-effort only.
+    const geo = await getClientGeoCoords(6_000);
+
     // Bearer is still in Keychain until clearAll — server invalidates the session.
     try {
-      await authApi.logout(deviceId);
+      await authApi.logout(deviceId, geo || undefined);
     } catch {
       /* server logout is best-effort — local sign-out must still complete */
     }

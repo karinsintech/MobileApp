@@ -359,6 +359,7 @@ export const SecureStorage = {
 // ── Encrypted MMKV Cache Helpers ──────────────────────────────────────────
 export const Cache = {
   setJSON<T>(key: string, value: T): void {
+    if (!isEncryptedMmkvReady()) return;
     cache().set(key, JSON.stringify(value));
   },
 
@@ -371,16 +372,19 @@ export const Cache = {
   },
 
   set(key: string, value: string | number | boolean): void {
+    if (!isEncryptedMmkvReady()) return;
     if (typeof value === 'string') cache().set(key, value);
     else if (typeof value === 'number') cache().set(key, value);
     else cache().set(key, value);
   },
 
   getString(key: string): string | null {
+    if (!isEncryptedMmkvReady()) return null;
     return cache().getString(key) ?? null;
   },
 
   delete(key: string): void {
+    if (!isEncryptedMmkvReady()) return;
     cache().delete(key);
   },
 };

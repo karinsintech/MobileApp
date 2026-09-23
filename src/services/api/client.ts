@@ -17,7 +17,7 @@ const MOBILE_CLIENT_HEADERS = {
   'X-App-Platform': 'mobile',
   'X-Device-Platform': Platform.OS === 'ios' ? 'ios' : 'android',
   'X-App-Version':
-    (typeof process !== 'undefined' && process.env?.KARINS_APP_VERSION) || '2.1.6',
+    (typeof process !== 'undefined' && process.env?.KARINS_APP_VERSION) || '2.1.7',
 } as const;
 
 // Queue of requests waiting for token refresh

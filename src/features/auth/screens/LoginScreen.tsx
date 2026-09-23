@@ -16,6 +16,10 @@ import {
   getPinLockRemainingMs,
 } from '../../../services/auth/pinAttemptGuard';
 import { PinEntryModal } from '../../profile/components/PinEntryModal';
+import {
+  attachLoginLocationAppStateListener,
+  ensureLoginLocationReady,
+} from '../../../utils/getClientGeoCoords';
 
 type Props = AuthScreenProps<'Login'>;
 
@@ -43,6 +47,13 @@ export default function LoginScreen({ navigation }: Props) {
   useEffect(() => {
     refreshPinIdentity();
   }, [refreshPinIdentity]);
+
+  // Permission vs Location: ask for app permission, then if Location is off prompt
+  // settings; re-warm when the user returns after enabling GPS.
+  useEffect(() => {
+    void ensureLoginLocationReady();
+    return attachLoginLocationAppStateListener();
+  }, []);
 
   const handleSignIn = async () => {
     if (!mobileNo.trim() || !password.trim()) {

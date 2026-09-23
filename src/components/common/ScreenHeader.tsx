@@ -4,12 +4,12 @@
  * push actions onto a separate band above the title.
  */
 
-import React from 'react';
+import React, { useContext } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { NavigationContext } from '@react-navigation/native';
 import { Colors, FontSize, FontFamily, AppTypography, Spacing } from '../../theme';
 
 interface ScreenHeaderProps {
@@ -36,15 +36,18 @@ function BackButton({ onPress }: { onPress: () => void }) {
 
 export function ScreenHeader({ title, subtitle, showBack = false, rightElement }: ScreenHeaderProps) {
   const insets = useSafeAreaInsets();
-  const nav = useNavigation();
+  // Context (not useNavigation) so mandatory post-login screens outside a
+  // stack navigator do not throw "Couldn't find a navigation object".
+  const nav = useContext(NavigationContext);
   const { width } = useWindowDimensions();
   // Shrink title typography instead of stacking actions on their own row.
   const isNarrow = width < NARROW_HEADER_WIDTH && Boolean(rightElement);
+  const canGoBack = Boolean(showBack && nav);
 
   return (
     <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
       <View style={styles.left}>
-        {showBack ? <BackButton onPress={() => nav.goBack()} /> : null}
+        {canGoBack ? <BackButton onPress={() => nav!.goBack()} /> : null}
         <View style={styles.titleBlock}>
           <Text
             style={[styles.title, isNarrow && styles.titleNarrow]}

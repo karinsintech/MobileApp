@@ -86,7 +86,7 @@ export default function ChangeAppLockPinScreen({ navigation }: Props) {
   const handleRemove = () => {
     Alert.alert(
       'Remove app lock PIN?',
-      'After idle lockout you will only be able to unlock with fingerprint until you set a new PIN.',
+      'You will be asked to set a new app lock PIN before continuing.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -103,10 +103,9 @@ export default function ChangeAppLockPinScreen({ navigation }: Props) {
               setCurrentPin('');
               return;
             }
+            // Clearing triggers RootNavigator mandatory Set PIN gate — do not goBack
+            // (MainTabs unmounts as soon as the hash is gone).
             clearAppLockPin();
-            Alert.alert('Removed', 'App lock PIN has been removed.', [
-              { text: 'OK', onPress: () => navigation.goBack() },
-            ]);
           },
         },
       ],

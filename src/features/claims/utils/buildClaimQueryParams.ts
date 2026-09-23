@@ -51,6 +51,7 @@ export function buildClaimQueryParams(
     claimStatus,
     claimType: filters.claimType || 'undefined',
     claimLevel: filters.claimLevel || 'undefined',
+    txnReaderDateTimeSort: 'descend',
   };
 
   // Web sends customerName only; keep dashboard customer scope when no name filter is set.

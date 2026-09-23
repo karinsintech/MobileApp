@@ -12,6 +12,7 @@ import {
   clearPinAttempts,
   recordPinFailure,
 } from './pinAttemptGuard';
+import { getLoginAuditGeoCoords } from '../../utils/getClientGeoCoords';
 
 export type PinSignInResult =
   | { status: 'success'; sessionData: LoginResponse }
@@ -72,7 +73,13 @@ export async function signInWithPinLogin(
   }
 
   try {
-    const { data } = await authApi.pinSignIn({ mobileNumber, pin });
+    // Cache-only geo — same non-blocking path as password sign-in.
+    const geo = await getLoginAuditGeoCoords();
+    const { data } = await authApi.pinSignIn({
+      mobileNumber,
+      pin,
+      ...(geo || {}),
+    });
     clearPinAttempts(mobileNumber);
     return { status: 'success', sessionData: data };
   } catch (error: any) {

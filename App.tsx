@@ -48,6 +48,7 @@ function AppWithProviders() {
 
 export default function App() {
   const [showLaunchSplash, setShowLaunchSplash] = useState(true);
+  const [storageReady, setStorageReady] = useState(false);
   const [integrityBlocked, setIntegrityBlocked] = useState(false);
   const [integrityReasons, setIntegrityReasons] = useState<string[]>([]);
 
@@ -74,6 +75,8 @@ export default function App() {
 
       const { initEncryptedMmkv } = await import('./src/services/storage/encryptedMmkv');
       await initEncryptedMmkv();
+      // RootNavigator reads app-lock PIN from MMKV — do not mount until stores exist.
+      setStorageReady(true);
       const { pushService } = await import('./src/services/notifications/pushService');
       await pushService.ensureAndroidChannel();
       await store.dispatch(restoreSession());
@@ -95,6 +98,9 @@ export default function App() {
             <CompromisedDeviceScreen reasons={integrityReasons} />
           ) : showLaunchSplash ? (
             <LaunchSplashScreen onDone={() => setShowLaunchSplash(false)} />
+          ) : !storageReady ? (
+            // Splash finished before Keychain/MMKV init — hold briefly without remounting splash.
+            <View style={{ flex: 1, backgroundColor: '#0A1628' }} />
           ) : (
             <AppWithProviders />
           )}

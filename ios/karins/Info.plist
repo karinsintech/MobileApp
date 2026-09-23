@@ -43,6 +43,8 @@
 	</dict>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Karins uses access to your photos to allow you to choose images from your gallery that you want to upload for Document Verification.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Karins uses your location only to record where you signed in, for account security.</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>Audiowide-Regular.ttf</string>

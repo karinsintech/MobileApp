@@ -1,6 +1,9 @@
 /**
- * First-time device app lock PIN setup.
+ * Device app lock PIN setup — used from Profile and as a mandatory post-login gate.
  * Separate from the server account PIN used for quick login.
+ *
+ * Mandatory mode (fresh install / reinstall / PIN removed): no back button;
+ * saving unlocks the main app shell. Optional mode keeps Profile back navigation.
  */
 
 import React, { useState } from 'react';
@@ -19,6 +22,13 @@ import { Colors, FontSize, Spacing, Radius } from '../../../theme';
 import type { MoreScreenProps } from '../../../navigation/types';
 
 type Props = MoreScreenProps<'SetAppLockPin'>;
+
+export type SetAppLockPinFormProps = {
+  /** When true, user cannot leave until a PIN is saved (post-login / reinstall). */
+  mandatory?: boolean;
+  /** Called after a successful save — Profile uses goBack; gate relies on PIN subscription. */
+  onComplete?: () => void;
+};
 
 function PinField({
   label,
@@ -46,7 +56,13 @@ function PinField({
   );
 }
 
-export default function SetAppLockPinScreen({ navigation }: Props) {
+/**
+ * Shared set-PIN UI — RootNavigator mounts this in mandatory mode before MainTabs.
+ */
+export function SetAppLockPinForm({
+  mandatory = false,
+  onComplete,
+}: SetAppLockPinFormProps) {
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
 
@@ -64,8 +80,17 @@ export default function SetAppLockPinScreen({ navigation }: Props) {
       setAppLockPin(pin);
       Alert.alert(
         'App lock PIN set',
-        'This PIN unlocks the app after 2 minutes idle — it is not your account PIN.',
-        [{ text: 'OK', onPress: () => navigation.goBack() }],
+        mandatory
+          ? 'Your app lock PIN is saved. You will use it to unlock Karins after idle lockout.'
+          : 'This PIN unlocks the app after idle lockout — it is not your account PIN.',
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              onComplete?.();
+            },
+          },
+        ],
       );
     } catch (err: unknown) {
       const message =
@@ -76,11 +101,16 @@ export default function SetAppLockPinScreen({ navigation }: Props) {
 
   return (
     <LiquidBackground>
-      <ScreenHeader title="Set App Lock PIN" showBack />
+      <ScreenHeader
+        title="Set App Lock PIN"
+        // Mandatory setup cannot be skipped — idle unlock needs this PIN.
+        showBack={!mandatory}
+      />
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         <Text style={styles.subtitle}>
-          Create a 4-digit PIN used only to unlock Karins after idle lockout.
-          This is separate from your account PIN for quick sign-in.
+          {mandatory
+            ? 'Create a 4-digit app lock PIN to continue. Without it, the app cannot unlock after idle lockout. This is separate from your account PIN for quick sign-in.'
+            : 'Create a 4-digit PIN used only to unlock Karins after idle lockout. This is separate from your account PIN for quick sign-in.'}
         </Text>
 
         <GlassCard style={styles.card}>
@@ -97,6 +127,12 @@ export default function SetAppLockPinScreen({ navigation }: Props) {
         </GlassCard>
       </ScrollView>
     </LiquidBackground>
+  );
+}
+
+export default function SetAppLockPinScreen({ navigation }: Props) {
+  return (
+    <SetAppLockPinForm onComplete={() => navigation.goBack()} />
   );
 }
 

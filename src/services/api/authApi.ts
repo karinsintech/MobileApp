@@ -18,9 +18,17 @@ export const authApi = {
   refresh: () =>
     apiClient.post<RefreshResponse>('/auth/mobile/refresh', {}),
 
-  /** Logout — Bearer invalidates session; deviceId revokes push registration when present. */
-  logout: (deviceId: string) =>
-    apiClient.post('/auth/mobile/logout', { deviceId }),
+  /** Logout — Bearer invalidates session; deviceId revokes push; geo stamps logout coords. */
+  logout: (
+    deviceId: string,
+    geo?: { latitude?: number; longitude?: number },
+  ) =>
+    apiClient.post('/auth/mobile/logout', {
+      deviceId,
+      ...(geo?.latitude != null && geo?.longitude != null
+        ? { latitude: geo.latitude, longitude: geo.longitude }
+        : {}),
+    }),
 
   /** Send OTP to verify mobile number */
   sendOTP: (mobileNo: string) =>

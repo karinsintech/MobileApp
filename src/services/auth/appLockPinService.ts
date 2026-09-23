@@ -8,6 +8,7 @@
 
 import bcrypt from 'react-native-bcrypt';
 import { Cache } from '../storage/SecureStorage';
+import { isEncryptedMmkvReady } from '../storage/encryptedMmkv';
 import {
   assertPinAttemptAllowed,
   clearPinAttempts,
@@ -19,7 +20,31 @@ const APP_LOCK_PIN_HASH_KEY = 'app_lock_pin_hash';
 const APP_LOCK_ATTEMPT_SCOPE = 'device_app_lock';
 const BCRYPT_ROUNDS = 10;
 
+/** Lets RootNavigator re-check the mandatory set-PIN gate without polling MMKV. */
+type AppLockPinListener = () => void;
+const appLockPinListeners = new Set<AppLockPinListener>();
+
+function emitAppLockPinChange(): void {
+  appLockPinListeners.forEach((listener) => {
+    try {
+      listener();
+    } catch {
+      // A bad subscriber must not break PIN write/clear.
+    }
+  });
+}
+
+/** Subscribe to set/clear of the device app-lock PIN (e.g. mandatory setup gate). */
+export function subscribeAppLockPinChange(listener: AppLockPinListener): () => void {
+  appLockPinListeners.add(listener);
+  return () => {
+    appLockPinListeners.delete(listener);
+  };
+}
+
 export function hasAppLockPin(): boolean {
+  // RootNavigator may mount while App.tsx is still awaiting initEncryptedMmkv.
+  if (!isEncryptedMmkvReady()) return false;
   const hash = Cache.getString(APP_LOCK_PIN_HASH_KEY);
   return Boolean(hash && hash.length > 0);
 }
@@ -30,11 +55,13 @@ export function setAppLockPin(pin: string): void {
   }
   Cache.set(APP_LOCK_PIN_HASH_KEY, bcrypt.hashSync(pin, BCRYPT_ROUNDS));
   clearPinAttempts(APP_LOCK_ATTEMPT_SCOPE);
+  emitAppLockPinChange();
 }
 
 export function clearAppLockPin(): void {
   Cache.delete(APP_LOCK_PIN_HASH_KEY);
   clearPinAttempts(APP_LOCK_ATTEMPT_SCOPE);
+  emitAppLockPinChange();
 }
 
 export type VerifyAppLockPinResult =
