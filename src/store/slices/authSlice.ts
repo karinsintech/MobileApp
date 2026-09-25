@@ -17,7 +17,7 @@ import {
 import { switchActiveCustomer } from '../../services/auth/customerSwitch';
 import { ensureDeviceIdPersisted, resolveLogoutDeviceId } from '../../services/auth/deviceIdentity';
 import { signInWithPinLogin, syncPinLoginPreference, enablePinLogin } from '../../services/auth/pinAuthService';
-import { getClientGeoCoords, getLoginAuditGeoCoords } from '../../utils/getClientGeoCoords';
+import { getCachedOrFreshGeoCoords, getClientGeoCoords } from '../../utils/getClientGeoCoords';
 
 /** Same wording as a bad-credentials failure so restricted roles are not tipped off. */
 const MOBILE_LOGIN_BLOCKED_MESSAGE = 'Username and password is invalid';
@@ -107,11 +107,16 @@ export const signIn = createAsyncThunk<
     invalidateApiSession();
     await SecureStorage.prepareForSignIn();
 
-    // Cache-only geo — never await a permission dialog or cold GPS lock here.
-    const geo = await getLoginAuditGeoCoords();
+    // Location is mandatory — API rejects sign-in without lat/lng
+    const geo = await getClientGeoCoords(12_000);
+    if (!geo) {
+      return rejectWithValue(
+        'Location is required to sign in. Please allow location access and turn on Location services.',
+      );
+    }
     const { data } = await authApi.signIn({
       ...payload,
-      ...(geo || {}),
+      ...geo,
     });
 
     if (!data?.accessToken) {
@@ -285,12 +290,18 @@ export const signOut = createAsyncThunk<void, SignOutOptions | undefined>(
     const forgetDevice = options?.forgetDevice === true;
     const deviceId = await resolveLogoutDeviceId();
 
-    // Capture logout coords while session/Bearer is still valid — best-effort only.
-    const geo = await getClientGeoCoords(6_000);
+    // Capture logout coords while Bearer is still valid — prefer login warm/MMKV
+    // cache so a cold GPS lock during Sign Out does not drop logout_* audit fields.
+    const geo = await getCachedOrFreshGeoCoords(12_000);
 
     // Bearer is still in Keychain until clearAll — server invalidates the session.
     try {
-      await authApi.logout(deviceId, geo || undefined);
+      await authApi.logout(
+        deviceId,
+        geo
+          ? { latitude: geo.latitude, longitude: geo.longitude }
+          : undefined,
+      );
     } catch {
       /* server logout is best-effort — local sign-out must still complete */
     }

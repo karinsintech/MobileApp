@@ -23,6 +23,7 @@ import {
   restoreDashboardContext,
 } from './src/store/slices/authSlice';
 import { RootNavigator } from './src/navigation/RootNavigator';
+import { LocationRequiredPopup } from './src/components/common/LocationRequiredPopup';
 import { LaunchSplashScreen } from './src/features/splash/LaunchSplashScreen';
 import { OfflineBanner } from './src/components/common/OfflineBanner';
 import { SessionPrivacyGate } from './src/features/session/SessionPrivacyGate';
@@ -41,6 +42,8 @@ function AppWithProviders() {
       <OfflineBanner />
       <RootNavigator />
       <SessionPrivacyGate />
+      {/* Centered popup only — no full-screen location gate */}
+      <LocationRequiredPopup />
     </View>
   );
 }

@@ -1,16 +1,17 @@
 /**
- * Best-effort device geolocation for Login Sessions audit rows.
- * Fails soft (null) when permission denied, timeout, GPS off, or unavailable —
- * never blocks password / PIN sign-in or logout.
+ * Device geolocation for login security audit and hard app/login gate.
+ * Location is mandatory — Sign In (password / PIN) and app access require a
+ * valid lat/lng. Soft-fail only for logout audit.
  *
- * Warm-up + in-memory cache ensure failed login attempts ("tries") still carry
- * lat/lng when permission was already granted on the login screen.
+ * Warm-up + in-memory + MMKV cache so logout can stamp coords even when a
+ * cold GPS lock would miss the short sign-out window (same idea as web).
  *
  * App permission ≠ device Location toggle — both must be on for a fix.
  */
 import { Platform, PermissionsAndroid, Linking, Alert, AppState } from 'react-native';
 import Geolocation from '@react-native-community/geolocation';
 import DeviceInfo from 'react-native-device-info';
+import { Cache } from '../services/storage/SecureStorage';
 
 export type ClientGeoCoords = {
   latitude: number;
@@ -21,13 +22,30 @@ export type ClientGeoCoords = {
 let cachedLoginGeo: ClientGeoCoords | null = null;
 let cachedLoginGeoAtMs = 0;
 const GEO_CACHE_TTL_MS = 120_000;
+/** Survives TTL so logout still has coords hours after login warm-up. */
+const LAST_GEO_MMKV_KEY = 'last_login_audit_geo';
 
 /** Avoid spamming the "turn on Location" alert on every Login remount. */
 let promptedLocationServicesThisSession = false;
 
+function isValidCoords(coords: ClientGeoCoords | null | undefined): coords is ClientGeoCoords {
+  if (!coords) return false;
+  const { latitude, longitude } = coords;
+  return (
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    !(latitude === 0 && longitude === 0)
+  );
+}
+
 function rememberGeo(coords: ClientGeoCoords): ClientGeoCoords {
   cachedLoginGeo = coords;
   cachedLoginGeoAtMs = Date.now();
+  try {
+    Cache.setJSON(LAST_GEO_MMKV_KEY, coords);
+  } catch {
+    // MMKV may not be ready during early boot — memory cache still helps
+  }
   return coords;
 }
 
@@ -36,6 +54,17 @@ function getFreshCachedGeo(): ClientGeoCoords | null {
   if (!cachedLoginGeo) return null;
   if (Date.now() - cachedLoginGeoAtMs > GEO_CACHE_TTL_MS) return null;
   return cachedLoginGeo;
+}
+
+/** Memory (any age) or MMKV — for logout stamp when GPS is slow/cold. */
+function getPersistedGeo(): ClientGeoCoords | null {
+  if (isValidCoords(cachedLoginGeo)) return cachedLoginGeo;
+  try {
+    const stored = Cache.getJSON<ClientGeoCoords>(LAST_GEO_MMKV_KEY);
+    return isValidCoords(stored) ? stored : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Check-only — never shows the system permission dialog. */
@@ -62,9 +91,9 @@ async function ensureLocationPermission(): Promise<boolean> {
       if (already) return true;
 
       const result = await PermissionsAndroid.request(fine, {
-        title: 'Location access',
+        title: 'Location required',
         message:
-          'Karins uses your location only to record where you signed in, for account security.',
+          'Karins requires your location to sign in and use the app. Without location, access is not allowed.',
         buttonPositive: 'Allow',
         buttonNegative: 'Deny',
       });
@@ -105,23 +134,23 @@ export function openDeviceLocationSettings(): void {
 }
 
 /**
- * One alert per app session when permission is OK but Location is off.
- * Soft — user can dismiss and still sign in without coords.
+ * One alert when permission is OK but Location is off.
+ * Mandatory — no "Not now" skip; user must open settings or cancel and stay blocked.
  */
 export function promptEnableDeviceLocation(): void {
   if (promptedLocationServicesThisSession) return;
   promptedLocationServicesThisSession = true;
 
   Alert.alert(
-    'Turn on Location',
-    'Location permission is allowed, but device Location is off. Turn it on so Karins can record where you signed in.',
+    'Location required',
+    'Device Location is off. Turn it on to use Karins — sign-in and app access are not allowed without location.',
     [
-      { text: 'Not now', style: 'cancel' },
       {
         text: 'Open settings',
         onPress: () => openDeviceLocationSettings(),
       },
     ],
+    { cancelable: false },
   );
 }
 
@@ -134,26 +163,43 @@ export async function getClientGeoCoords(
 ): Promise<ClientGeoCoords | null> {
   try {
     const allowed = await ensureLocationPermission();
-    if (!allowed) return null;
+    if (!allowed) return getPersistedGeo();
 
     // Permission alone is not enough when the user disabled Location in Settings.
     const locationOn = await isDeviceLocationEnabled();
     if (!locationOn) {
       promptEnableDeviceLocation();
-      return null;
+      return getPersistedGeo();
     }
 
     const coords = await readPosition(timeoutMs);
-    return coords ? rememberGeo(coords) : null;
+    if (coords) return rememberGeo(coords);
+    // Cold GPS miss — still return login warm-up / MMKV so logout can stamp
+    return getPersistedGeo();
   } catch {
-    return null;
+    return getPersistedGeo();
   }
 }
 
 /**
- * Sign-in critical path: never prompt for permission and never wait on a cold
- * GPS lock. Prefer warm-up cache so success AND failed attempts still stamp
- * location in Login Sessions; otherwise a short GPS read (600ms max).
+ * Prefer warm/MMKV cache so logout never waits on a cold GPS lock (web parity).
+ * Falls back to a GPS read only when cache is empty.
+ */
+export async function getCachedOrFreshGeoCoords(
+  timeoutMs = 12_000,
+): Promise<ClientGeoCoords | null> {
+  const cached = getPersistedGeo();
+  if (cached) return cached;
+  try {
+    return await getClientGeoCoords(timeoutMs);
+  } catch {
+    return getPersistedGeo();
+  }
+}
+
+/**
+ * Soft resolve for logout audit — never throws; null when GPS unavailable.
+ * Prefer getCachedOrFreshGeoCoords on the sign-out path.
  */
 export async function getLoginAuditGeoCoords(): Promise<ClientGeoCoords | null> {
   try {
@@ -161,16 +207,16 @@ export async function getLoginAuditGeoCoords(): Promise<ClientGeoCoords | null> 
     if (fromWarm) return fromWarm;
 
     const allowed = await hasLocationPermission();
-    if (!allowed) return null;
+    if (!allowed) return getPersistedGeo();
 
     const locationOn = await isDeviceLocationEnabled();
-    if (!locationOn) return null;
+    if (!locationOn) return getPersistedGeo();
 
     // Cache-only window — maximumAge below lets a warm OS fix return instantly.
     const coords = await readPosition(600);
-    return coords ? rememberGeo(coords) : null;
+    return coords ? rememberGeo(coords) : getPersistedGeo();
   } catch {
-    return null;
+    return getPersistedGeo();
   }
 }
 
@@ -201,7 +247,7 @@ export async function ensureLoginLocationReady(): Promise<void> {
     // Keep prompted flag so we do not re-alert immediately after returning from settings.
     await getClientGeoCoords(12_000);
   } catch {
-    // Soft — login must proceed without coords.
+    // Soft warm-up — Sign In will hard-fail later if coords are still missing
   }
 }
 

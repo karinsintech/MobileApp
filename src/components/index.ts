@@ -5,6 +5,7 @@ export { SkeletonBlock, SkeletonCard } from './common/SkeletonLoader';
 export { EmptyState } from './common/EmptyState';
 export { ScreenHeader } from './common/ScreenHeader';
 export { LiquidBackground } from './common/LiquidBackground';
+export { LocationRequiredPopup } from './common/LocationRequiredPopup';
 export { UnauthorizedScreen } from './common/UnauthorizedScreen';
 export { ErrorBoundary } from './common/ErrorBoundary';
 export { PlaceholderScreen } from './common/PlaceholderScreen';
