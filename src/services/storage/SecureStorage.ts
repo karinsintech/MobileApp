@@ -317,6 +317,13 @@ export const SecureStorage = {
     const appLockPinHash = !forgetDevice
       ? cache().getString(APP_LOCK_PIN_HASH_KEY)
       : null;
+    // Same as web localforage — keep Role Management menus across logout so a
+    // later getUserAccess 401 does not blank every gated screen.
+    const {
+      snapshotAccessMenusCache,
+      restoreAccessMenusCache,
+    } = await import('./accessMenusCache');
+    const accessMenusSnapshot = !forgetDevice ? snapshotAccessMenusCache() : [];
 
     await SecureStorage.clearSession();
     await SecureStorage.clearDeviceId();
@@ -340,6 +347,9 @@ export const SecureStorage = {
     }
     if (appLockPinHash) {
       cache().set(APP_LOCK_PIN_HASH_KEY, appLockPinHash);
+    }
+    if (accessMenusSnapshot.length) {
+      restoreAccessMenusCache(accessMenusSnapshot);
     }
 
     try {

@@ -25,8 +25,9 @@ export function hasAnyPrivilege(
 
 /**
  * Role-management gate for a feature.
- * - While menus are unresolved or failed: deny mapped features (fail closed).
- * - After a successful load: require the mapped privilege(s).
+ * - While menus are unresolved (and no device cache hydrated): deny mapped features.
+ * - After a successful load OR web-style cache hydrate: require the mapped privilege(s).
+ * - A getUserAccess 401 keeps the last cached menus — same soft behaviour as web SideNav.
  */
 export function canAccessByPrivilege(
   accessMenus: AccessMenuItem[] | null | undefined,
