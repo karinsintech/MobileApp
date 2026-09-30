@@ -1,6 +1,7 @@
 /**
- * Centered popup when Location is off or denied.
- * Does not gate-mount the app — only blocks interaction until Location is on.
+ * Centered popup when Location is off or permission is denied.
+ * GPS acquisition runs in the background — never shows a loading gate while
+ * waiting for a fix. Overlay appears only when Location / permission blocks use.
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
@@ -10,8 +11,9 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  ActivityIndicator,
   AppState,
+  PermissionsAndroid,
+  Platform,
 } from 'react-native';
 import {
   getClientGeoCoords,
@@ -20,37 +22,68 @@ import {
 } from '../../utils/getClientGeoCoords';
 import { Colors, FontFamily, FontSize, Spacing, Radius } from '../../theme';
 
+async function hasFineLocationPermission(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  try {
+    return await PermissionsAndroid.check(
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function LocationRequiredPopup() {
   const [visible, setVisible] = useState(false);
-  const [checking, setChecking] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
 
-  const checkLocation = useCallback(async () => {
-    setChecking(true);
+  /**
+   * Decide overlay from Location toggle / permission only.
+   * Do not wait on a GPS lock — that used to flash a loading state over the app.
+   */
+  const checkLocation = useCallback(async (options?: { warmGps?: boolean }) => {
     try {
       const locationOn = await isDeviceLocationEnabled();
       if (!locationOn) {
         setVisible(true);
         return;
       }
-      const coords = await getClientGeoCoords(12_000);
-      // Keep popup until a real fix exists — login/API require lat/lng
-      setVisible(!coords);
+
+      const permitted = await hasFineLocationPermission();
+      if (!permitted) {
+        setVisible(true);
+        return;
+      }
+
+      // Location + permission OK — hide overlay immediately; warm GPS quietly
+      setVisible(false);
+      if (options?.warmGps !== false) {
+        void getClientGeoCoords(12_000);
+      }
     } catch {
       setVisible(true);
-    } finally {
-      setChecking(false);
     }
   }, []);
 
   useEffect(() => {
-    void checkLocation();
+    void checkLocation({ warmGps: true });
   }, [checkLocation]);
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
-      if (next === 'active') void checkLocation();
+      // Returning from Settings — re-check toggle/permission without a spinner gate
+      if (next === 'active') void checkLocation({ warmGps: true });
     });
     return () => sub.remove();
+  }, [checkLocation]);
+
+  const handleRetry = useCallback(async () => {
+    setIsRetrying(true);
+    try {
+      await checkLocation({ warmGps: true });
+    } finally {
+      setIsRetrying(false);
+    }
   }, [checkLocation]);
 
   return (
@@ -70,26 +103,24 @@ export function LocationRequiredPopup() {
             Location is required to use Karins. Please enable Location / GPS and
             allow permission to continue.
           </Text>
-          {checking ? (
-            <ActivityIndicator color={Colors.blue} style={styles.spinner} />
-          ) : (
-            <>
-              <TouchableOpacity
-                style={styles.btn}
-                onPress={openDeviceLocationSettings}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.btnText}>Open settings</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.secondaryBtn}
-                onPress={() => void checkLocation()}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.secondaryText}>I turned it on — retry</Text>
-              </TouchableOpacity>
-            </>
-          )}
+          <TouchableOpacity
+            style={[styles.btn, isRetrying && styles.btnDisabled]}
+            onPress={openDeviceLocationSettings}
+            activeOpacity={0.85}
+            disabled={isRetrying}
+          >
+            <Text style={styles.btnText}>Open settings</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.secondaryBtn}
+            onPress={() => void handleRetry()}
+            activeOpacity={0.85}
+            disabled={isRetrying}
+          >
+            <Text style={styles.secondaryText}>
+              {isRetrying ? 'Checking…' : 'I turned it on — retry'}
+            </Text>
+          </TouchableOpacity>
         </View>
       </View>
     </Modal>
@@ -137,6 +168,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  btnDisabled: {
+    opacity: 0.6,
+  },
   btnText: {
     fontFamily: FontFamily.bold,
     fontSize: FontSize.md,
@@ -150,8 +184,5 @@ const styles = StyleSheet.create({
     fontFamily: FontFamily.semibold,
     fontSize: FontSize.sm,
     color: Colors.blue,
-  },
-  spinner: {
-    marginTop: Spacing[2],
   },
 });

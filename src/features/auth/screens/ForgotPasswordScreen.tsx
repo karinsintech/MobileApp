@@ -4,14 +4,13 @@
  *
  * Three steps are driven by a single endpoint (PUT /user/forgot-password):
  *   1. mobile number  → OTP_SENT
- *   2. 4-digit OTP    → OTP_VERIFIED
- *   3. new password   → PASSWORD_CHANGED
+ *   2. 4-digit OTP    → OTP_VERIFIED (+ resetToken)
+ *   3. new password + resetToken → PASSWORD_CHANGED
  *
- * There is no reset token: the server links the steps by flagging the user row
- * as mobile-verified after step 2, so step 3 must follow before a new OTP is
- * issued or the reset is rejected with 403.
+ * The server issues a one-time `resetToken` after OTP proof; step 3 must send
+ * that token with the new password (or resubmit OTP) before TTL expires.
  */
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   KeyboardAvoidingView, Platform, ActivityIndicator, Alert, ScrollView,
@@ -19,6 +18,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { authApi } from '../../../services/api/authApi';
 import { getApiErrorMessage } from '../../../services/api/client';
+import { ensureAuditGeoCoords } from '../../../utils/getClientGeoCoords';
 import { LiquidBackground, GlassCard } from '../../../components';
 import { Colors, FontSize, Spacing, Radius } from '../../../theme';
 import type { AuthScreenProps } from '../../../navigation/types';
@@ -52,15 +52,25 @@ export default function ForgotPasswordScreen({ navigation }: Props) {
   const [submittedMobileNo, setSubmittedMobileNo] = useState('');
 
   const [otp, setOtp] = useState<string[]>(Array(OTP_LENGTH).fill(''));
+  // Captured from OTP_VERIFIED and required on the password step — omitting it
+  // triggers "OTP or reset token is required to set a new password".
+  const [resetToken, setResetToken] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isNewPasswordVisible, setNewPasswordVisible] = useState(false);
   const [isConfirmPasswordVisible, setConfirmPasswordVisible] = useState(false);
 
+  useEffect(() => {
+    // Warm GPS while the user fills the form — final reset must stamp Location
+    void ensureAuditGeoCoords(12_000);
+  }, []);
+
   /** Returns to step 1 keeping the mobile number, so "Resend" is one tap. */
   const restartFlow = () => {
     setStep(1);
     setOtp(Array(OTP_LENGTH).fill(''));
+    // Stale tokens are invalid once a new OTP is requested — drop them here.
+    setResetToken(null);
     setNewPassword('');
     setConfirmPassword('');
     setError('');
@@ -134,6 +144,10 @@ export default function ForgotPasswordScreen({ navigation }: Props) {
         submittedOtp,
       });
 
+      // Backend mints a single-use hex token after OTP proof; step 3 must echo it.
+      if (data.resetToken) {
+        setResetToken(data.resetToken);
+      }
       setNotice(data.message);
       setStep(3);
     } catch (err) {
@@ -165,11 +179,20 @@ export default function ForgotPasswordScreen({ navigation }: Props) {
       return;
     }
 
+    // Joi rejects password-only bodies; without a token the user never leaves step 3.
+    if (!resetToken) {
+      setError('Session expired. Please verify the OTP again.');
+      return;
+    }
+
     setLoading(true);
     try {
+      // Ensure GPS is cached so the interceptor can stamp Login Session Location
+      await ensureAuditGeoCoords(10_000);
       const { data } = await authApi.forgotPassword({
         mobileNo: submittedMobileNo,
         password: newPassword,
+        resetToken,
       });
 
       // Reset does not create a session — the user must sign in with the new
@@ -179,7 +202,7 @@ export default function ForgotPasswordScreen({ navigation }: Props) {
         { text: 'Sign In', onPress: () => navigation.navigate('Login') },
       ]);
     } catch (err) {
-      // 403 here means the OTP step was skipped or invalidated by a newer code.
+      // 403 here means the token expired or a newer OTP invalidated this reset.
       setError(getApiErrorMessage(err, 'Error occurred'));
     } finally {
       setLoading(false);

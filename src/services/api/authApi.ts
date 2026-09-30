@@ -40,8 +40,9 @@ export const authApi = {
 
   /**
    * Public password reset, shared with the web portal. Called three times against
-   * the same route: mobile only → OTP_SENT, + submittedOtp → OTP_VERIFIED,
-   * + password → PASSWORD_CHANGED. No auth header (see PUBLIC_AUTH_PATHS).
+   * the same route: mobile only → OTP_SENT, + submittedOtp → OTP_VERIFIED
+   * (returns resetToken), + password + resetToken → PASSWORD_CHANGED.
+   * No auth header (see PUBLIC_AUTH_PATHS).
    */
   forgotPassword: (payload: ForgotPasswordPayload) =>
     apiClient.put<ForgotPasswordResponse>('/user/forgot-password', payload),

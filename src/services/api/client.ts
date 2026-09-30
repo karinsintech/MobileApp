@@ -2,6 +2,10 @@ import axios, { AxiosInstance, AxiosRequestConfig, InternalAxiosRequestConfig } 
 import { Platform } from 'react-native';
 import { API_BASE_URL } from '../../config/env';
 import { SecureStorage } from '../storage/SecureStorage';
+import {
+  ensureAuditGeoCoords,
+  readCachedClientGeoCoords,
+} from '../../utils/getClientGeoCoords';
 
 // fleet.karins.in serves the web SPA (nginx returns 405 on POST); API is api.karins.in.
 const BASE_URL = API_BASE_URL;
@@ -17,7 +21,7 @@ const MOBILE_CLIENT_HEADERS = {
   'X-App-Platform': 'mobile',
   'X-Device-Platform': Platform.OS === 'ios' ? 'ios' : 'android',
   'X-App-Version':
-    (typeof process !== 'undefined' && process.env?.KARINS_APP_VERSION) || '2.1.7',
+    (typeof process !== 'undefined' && process.env?.KARINS_APP_VERSION) || '2.1.9',
 } as const;
 
 // Queue of requests waiting for token refresh
@@ -115,6 +119,51 @@ function isPublicAuthRequest(url?: string): boolean {
   return pathMatchesExact(url, PUBLIC_AUTH_PATHS);
 }
 
+/** Paths that write Login Session Location — refresh GPS if cache is cold. */
+function needsAuditGeoRefresh(url?: string): boolean {
+  const pathname = requestPathname(url).toLowerCase();
+  return (
+    pathname.includes('/export') ||
+    pathname.includes('forgot-password') ||
+    pathname.includes('change-password') ||
+    pathname.includes('/auth/changepassword')
+  );
+}
+
+/**
+ * Stamp X-Client-Latitude/Longitude for security_audit_log.
+ * Uses AxiosHeaders.set when available so per-request Accept headers do not drop geo.
+ * For export / password routes, refreshes GPS when the cache is empty.
+ */
+async function attachClientGeoHeaders(
+  config: InternalAxiosRequestConfig,
+): Promise<void> {
+  try {
+    let geo = readCachedClientGeoCoords();
+    if (!geo && needsAuditGeoRefresh(config.url)) {
+      geo = await ensureAuditGeoCoords(8_000);
+    }
+    if (!geo || !config.headers) return;
+
+    const lat = String(geo.latitude);
+    const lng = String(geo.longitude);
+    const headers = config.headers as {
+      set?: (key: string, value: string) => void;
+      [key: string]: unknown;
+    };
+
+    if (typeof headers.set === 'function') {
+      headers.set('X-Client-Latitude', lat);
+      headers.set('X-Client-Longitude', lng);
+    } else {
+      headers['X-Client-Latitude'] = lat;
+      headers['X-Client-Longitude'] = lng;
+    }
+  } catch {
+    // Geo headers are best-effort — request must still proceed
+  }
+}
+
 function shouldAttemptTokenRefresh(url?: string): boolean {
   if (!url) return false;
   if (sessionInvalidated) return false;
@@ -150,9 +199,12 @@ async function persistRefreshedAccessToken(newToken: string): Promise<void> {
   }
 }
 
-// ── Request interceptor: inject access token ─────────────────────────────
+// ── Request interceptor: inject access token + client geo for audit ──────
 apiClient.interceptors.request.use(
   async (config: InternalAxiosRequestConfig) => {
+    // Stamp geo before auth branch — forgot-password is public but still audited
+    await attachClientGeoHeaders(config);
+
     if (isPublicAuthRequest(config.url)) {
       return config;
     }
