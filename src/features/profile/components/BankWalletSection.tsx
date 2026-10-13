@@ -147,7 +147,7 @@ function UpiBox({
             onPress={() => { void copyText('UPI ID', yesUpi); }}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
-            <CopyIcon size={16} color={Colors.blue} />
+            <CopyIcon size={16} color={Colors.white} />
           </TouchableOpacity>
         </View>
       ) : null}
@@ -171,7 +171,7 @@ function UpiBox({
             onPress={() => { void copyText('UPI ID', idfcUpi); }}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
-            <CopyIcon size={16} color={Colors.blue} />
+            <CopyIcon size={16} color={Colors.white} />
           </TouchableOpacity>
         </View>
       ) : null}
@@ -221,7 +221,7 @@ function WalletGrid({
     </View>
     <GlassCard style={styles.gridCard} noPadding>
       <View style={[styles.row, styles.headerRow, large && styles.headerRowLarge]}>
-        <Text style={[styles.headerCell, styles.headerCellField]} numberOfLines={1} allowFontScaling={false}>Field</Text>
+        <Text style={[styles.headerCell, styles.headerCellField]} numberOfLines={1} allowFontScaling={false}>Details</Text>
         <Text style={styles.headerCell} numberOfLines={1} allowFontScaling={false}>{yesLabel}</Text>
         <Text style={styles.headerCell} numberOfLines={1} allowFontScaling={false}>{idfcLabel}</Text>
       </View>
@@ -358,7 +358,7 @@ const styles = StyleSheet.create({
     fontSize: FontSize.base,
   },
   copyActions: { flexDirection: 'row', gap: 12 },
-  copyLink: { fontSize: FontSize.xs, color: Colors.blue, fontWeight: '600' },
+  copyLink: { fontSize: FontSize.xs, color: Colors.white, fontWeight: '600' },
   copyLinkLarge: { fontSize: FontSize.sm },
   gridCard: {},
   headerRow: { backgroundColor: Colors.blue, height: 36, alignItems: 'center' },
@@ -380,7 +380,7 @@ const styles = StyleSheet.create({
   },
   headerCellField: {
     flex: 0,
-    width: 58,
+    width: 72,
     textAlign: 'left',
     paddingLeft: 4,
   },
@@ -396,7 +396,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
   },
   rowLabel: {
-    width: 58,
+    width: 72,
     flexShrink: 0,
     fontSize: 11,
     lineHeight: 16,
@@ -461,7 +461,7 @@ const styles = StyleSheet.create({
   upiLink: {
     fontSize: 11,
     lineHeight: 16,
-    color: Colors.blue,
+    color: Colors.white,
     fontWeight: '700',
     textDecorationLine: 'underline',
     includeFontPadding: false,

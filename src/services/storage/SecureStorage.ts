@@ -317,6 +317,20 @@ export const SecureStorage = {
     const appLockPinHash = !forgetDevice
       ? cache().getString(APP_LOCK_PIN_HASH_KEY)
       : null;
+    // Keep last GPS across normal logout so forgot-password / next export can
+    // still stamp Login Session Location (wiped only on Forget this device).
+    // Key must match LAST_GEO_MMKV_KEY in getClientGeoCoords (avoid circular import).
+    const LAST_GEO_KEY = 'last_login_audit_geo';
+    const lastAuditGeoJson = !forgetDevice
+      ? cache().getString(LAST_GEO_KEY)
+      : null;
+    // Same as web localforage — keep Role Management menus across logout so a
+    // later getUserAccess 401 does not blank every gated screen.
+    const {
+      snapshotAccessMenusCache,
+      restoreAccessMenusCache,
+    } = await import('./accessMenusCache');
+    const accessMenusSnapshot = !forgetDevice ? snapshotAccessMenusCache() : [];
 
     await SecureStorage.clearSession();
     await SecureStorage.clearDeviceId();
@@ -340,6 +354,12 @@ export const SecureStorage = {
     }
     if (appLockPinHash) {
       cache().set(APP_LOCK_PIN_HASH_KEY, appLockPinHash);
+    }
+    if (lastAuditGeoJson) {
+      cache().set(LAST_GEO_KEY, lastAuditGeoJson);
+    }
+    if (accessMenusSnapshot.length) {
+      restoreAccessMenusCache(accessMenusSnapshot);
     }
 
     try {

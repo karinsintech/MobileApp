@@ -7,6 +7,7 @@ import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, ScrollView,
 } from 'react-native';
 import { profileApi } from '../../../services/api/profileApi';
+import { ensureAuditGeoCoords } from '../../../utils/getClientGeoCoords';
 import { LiquidBackground, GlassCard, ScreenHeader } from '../../../components';
 import { Colors, FontSize, Spacing, Radius } from '../../../theme';
 import type { MoreScreenProps } from '../../../navigation/types';
@@ -79,6 +80,8 @@ export default function ChangePasswordScreen({ navigation }: Props) {
 
     setLoading(true);
     try {
+      // Refresh GPS cache so change-password audit gets X-Client-Latitude/Longitude
+      await ensureAuditGeoCoords(10_000);
       await profileApi.changePassword({
         currentPassword: currentPassword.trim(),
         newPassword: newPassword.trim(),

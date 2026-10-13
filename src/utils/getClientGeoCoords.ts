@@ -18,12 +18,13 @@ export type ClientGeoCoords = {
   longitude: number;
 };
 
+/** Survives TTL so logout / export / password audit still have coords hours later. */
+export const LAST_GEO_MMKV_KEY = 'last_login_audit_geo';
+
 /** In-memory fix from warm-up / prior reads — Sign In must not wait on GPS. */
 let cachedLoginGeo: ClientGeoCoords | null = null;
 let cachedLoginGeoAtMs = 0;
 const GEO_CACHE_TTL_MS = 120_000;
-/** Survives TTL so logout still has coords hours after login warm-up. */
-const LAST_GEO_MMKV_KEY = 'last_login_audit_geo';
 
 /** Avoid spamming the "turn on Location" alert on every Login remount. */
 let promptedLocationServicesThisSession = false;
@@ -64,6 +65,30 @@ function getPersistedGeo(): ClientGeoCoords | null {
     return isValidCoords(stored) ? stored : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Sync cache read for API request headers — never prompts GPS.
+ * Used so exports / password / other audited actions stamp Location like web.
+ */
+export function readCachedClientGeoCoords(): ClientGeoCoords | null {
+  return getPersistedGeo();
+}
+
+/**
+ * Ensure a usable fix is in cache before export / password audit requests.
+ * Prefers cache; falls back to a bounded GPS read when empty.
+ */
+export async function ensureAuditGeoCoords(
+  timeoutMs = 8_000,
+): Promise<ClientGeoCoords | null> {
+  const cached = getPersistedGeo();
+  if (cached) return cached;
+  try {
+    return await getClientGeoCoords(timeoutMs);
+  } catch {
+    return getPersistedGeo();
   }
 }
 

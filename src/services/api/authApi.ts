@@ -5,6 +5,11 @@ import type {
   PinSignInPayload, PinStatusResponse,
   ForgotPasswordPayload, ForgotPasswordResponse,
 } from '../../types/auth';
+import type {
+  ServiceAccessResponse,
+  ServiceUnlockRequestPayload,
+  ServiceUnlockRequestResponse,
+} from '../../types/serviceAccess';
 
 export const authApi = {
   // Shared web auth route — no dedicated /auth/mobile/signIn exists on the
@@ -40,8 +45,9 @@ export const authApi = {
 
   /**
    * Public password reset, shared with the web portal. Called three times against
-   * the same route: mobile only → OTP_SENT, + submittedOtp → OTP_VERIFIED,
-   * + password → PASSWORD_CHANGED. No auth header (see PUBLIC_AUTH_PATHS).
+   * the same route: mobile only → OTP_SENT, + submittedOtp → OTP_VERIFIED
+   * (returns resetToken), + password + resetToken → PASSWORD_CHANGED.
+   * No auth header (see PUBLIC_AUTH_PATHS).
    */
   forgotPassword: (payload: ForgotPasswordPayload) =>
     apiClient.put<ForgotPasswordResponse>('/user/forgot-password', payload),
@@ -76,4 +82,21 @@ export const authApi = {
   /** Check whether the account has a PIN configured. */
   pinStatus: (mobileNumber: string) =>
     apiClient.post<PinStatusResponse>('/auth/pin/status', { mobileNumber }),
+
+  /**
+   * Enrollment flags for Vahan / eChallan / Sarathi (etc.).
+   * CUSTOMER uses personal mapping; CGA follows the selected default customer.
+   */
+  getServiceAccess: () =>
+    apiClient.get<ServiceAccessResponse>('/auth/service-access'),
+
+  /**
+   * Contact-support unlock enquiry from a locked service page.
+   * Does not require Fastag enrollment — authenticated portal user only.
+   */
+  submitServiceUnlockRequest: (payload: ServiceUnlockRequestPayload) =>
+    apiClient.post<ServiceUnlockRequestResponse>(
+      '/auth/service-unlock-request',
+      payload,
+    ),
 };

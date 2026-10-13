@@ -244,6 +244,10 @@ export const restoreSession = createAsyncThunk<
     }
 
     markApiSessionActive();
+    // Re-warm GPS into memory/MMKV so exports after cold restore still stamp Location
+    void import('../../utils/getClientGeoCoords').then(({ warmClientGeoCoords }) => {
+      warmClientGeoCoords();
+    });
     // Do not enroll/rewrite the unlock gate on cold restore — that was prompting
     // fingerprint on every open. Gate setup stays on sign-in / SessionPrivacyGate.
     return { user };

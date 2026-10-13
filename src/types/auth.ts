@@ -79,10 +79,15 @@ export interface OTPPayload {
  * Field names are dictated by the backend Joi schema — `submittedOtp` and
  * `password` are NOT interchangeable with the authenticated reset/change
  * endpoints, which expect `newPassword`/`confirmPassword`.
+ *
+ * After OTP_VERIFIED the server returns a 64-char hex `resetToken` that must be
+ * sent with `password` on the final step (same contract as the web portal).
  */
 export interface ForgotPasswordPayload {
   mobileNo: string;
   submittedOtp?: string;
+  // One-time token from OTP_VERIFIED — required with password unless OTP is resent in-body.
+  resetToken?: string;
   password?: string;
 }
 
@@ -93,6 +98,8 @@ export interface ForgotPasswordResponse {
   message: string;
   // Only returned on OTP_SENT / OTP_VERIFIED — the number the server matched.
   mobileNumber?: string;
+  // Plaintext one-time token returned only on OTP_VERIFIED; hashed at rest on the server.
+  resetToken?: string;
 }
 
 export interface DeviceRegistration {
@@ -118,6 +125,11 @@ export const REQUIRES_CONTEXT_SELECTION: RoleKey[] = [
 
 export function isCustomerGroupAdmin(roleKey?: RoleKey): boolean {
   return roleKey === CUSTOMER_GROUP_ADMIN_ROLE;
+}
+
+/** Portal CUSTOMER role — receives Vahan / eChallan / Sarathi profile tabs on web. */
+export function isCustomer(roleKey?: RoleKey): boolean {
+  return roleKey === 'CUSTOMER';
 }
 
 export function requiresAdminContextPicker(roleKey?: RoleKey): boolean {

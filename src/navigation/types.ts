@@ -63,6 +63,8 @@ export type RCListParams = {
   vehicleNo?: string;
   /** Dashboard Black list drill-down — web uses ?status=BLACKLIST. */
   status?: string;
+  /** Profile tab — skip lock intro and open the unlock request form. */
+  openRequestForm?: boolean;
 } | undefined;
 
 export type DLListParams = {
@@ -70,6 +72,8 @@ export type DLListParams = {
   expiryType?: string;
   licenseNo?: string;
   driverName?: string;
+  /** Profile tab — skip lock intro and open the unlock request form. */
+  openRequestForm?: boolean;
 } | undefined;
 
 // ── More Stack ────────────────────────────────────────────────────────────
@@ -79,6 +83,8 @@ export type MoreStackParamList = {
     initialVehicleNo?: string;
     initialChallanNo?: string;
     initialStatus?: 'Pending' | 'Disposed' | 'All';
+    /** Profile tab — skip lock intro and open the unlock request form. */
+    openRequestForm?: boolean;
   } | undefined;
   ChallanDetail:     { challan?: ChallanDetailPayload; challanNo?: string };
   PaymentHistory:    undefined;

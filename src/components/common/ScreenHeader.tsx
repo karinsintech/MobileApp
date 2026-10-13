@@ -16,6 +16,8 @@ interface ScreenHeaderProps {
   title: string;
   subtitle?: string;
   showBack?: boolean;
+  /** Override stack goBack — e.g. return to an in-flow step instead of leaving the screen. */
+  onBack?: () => void;
   rightElement?: React.ReactNode;
 }
 
@@ -34,7 +36,13 @@ function BackButton({ onPress }: { onPress: () => void }) {
   );
 }
 
-export function ScreenHeader({ title, subtitle, showBack = false, rightElement }: ScreenHeaderProps) {
+export function ScreenHeader({
+  title,
+  subtitle,
+  showBack = false,
+  onBack,
+  rightElement,
+}: ScreenHeaderProps) {
   const insets = useSafeAreaInsets();
   // Context (not useNavigation) so mandatory post-login screens outside a
   // stack navigator do not throw "Couldn't find a navigation object".
@@ -42,12 +50,13 @@ export function ScreenHeader({ title, subtitle, showBack = false, rightElement }
   const { width } = useWindowDimensions();
   // Shrink title typography instead of stacking actions on their own row.
   const isNarrow = width < NARROW_HEADER_WIDTH && Boolean(rightElement);
-  const canGoBack = Boolean(showBack && nav);
+  const handleBack = onBack ?? (nav ? () => nav.goBack() : undefined);
+  const canGoBack = Boolean(showBack && handleBack);
 
   return (
     <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
       <View style={styles.left}>
-        {canGoBack ? <BackButton onPress={() => nav!.goBack()} /> : null}
+        {canGoBack ? <BackButton onPress={handleBack!} /> : null}
         <View style={styles.titleBlock}>
           <Text
             style={[styles.title, isNarrow && styles.titleNarrow]}
