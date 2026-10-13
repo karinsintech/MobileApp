@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { GlassCard } from '../../../components';
 import { AppImage } from '../../../components/common/AppImage';
-import { CopyIcon } from '../../../components/icons';
+import { CopyIcon, QrCodeIcon } from '../../../components/icons';
 import { Colors, FontSize, Spacing, Radius } from '../../../theme';
 import type { VpaItem } from '../utils/mapCustomerProfile';
 import { openUpiPayment } from '../utils/upiPayment';
@@ -64,8 +64,10 @@ export function UpiVpaSection({ items }: Props) {
         <View style={styles.table}>
           <View style={styles.headerRow}>
             <Text style={[styles.headerCell, styles.vrnCol]}>VRN</Text>
-            <Text style={[styles.headerCell, styles.vpaCol]}>UPI ID</Text>
-            <Text style={[styles.headerCell, styles.qrCol]}>QR</Text>
+            <View style={styles.vpaCol}>
+              <Text style={styles.headerCell}>UPI ID</Text>
+              <QrCodeIcon size={14} color={Colors.white} />
+            </View>
           </View>
 
           <View style={styles.listFrame}>
@@ -81,6 +83,7 @@ export function UpiVpaSection({ items }: Props) {
                 filtered.map((item) => (
                   <View key={String(item.vId)} style={styles.bodyRow}>
                     <Text style={[styles.cell, styles.vrnCol]} numberOfLines={1}>{item.vrn}</Text>
+                    {/* UPI + copy + QR stay packed — no stretch gap before QR */}
                     <View style={styles.vpaCol}>
                       <TouchableOpacity
                         style={styles.vpaLinkHit}
@@ -100,16 +103,17 @@ export function UpiVpaSection({ items }: Props) {
                         onPress={() => { void copyText('UPI ID', item.vpa); }}
                         hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                       >
-                        <CopyIcon size={14} color={Colors.blue} />
+                        <CopyIcon size={14} color={Colors.white} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => setSelected(item)}
+                        activeOpacity={0.7}
+                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        accessibilityLabel="Show QR code"
+                      >
+                        <QrCodeIcon size={16} color={Colors.yellow} />
                       </TouchableOpacity>
                     </View>
-                    <TouchableOpacity
-                      style={styles.qrCol}
-                      onPress={() => setSelected(item)}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.qrLink}>QR</Text>
-                    </TouchableOpacity>
                   </View>
                 ))
               )}
@@ -185,30 +189,36 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.blue,
     paddingVertical: 6,
     paddingHorizontal: 8,
+    gap: 6,
   },
   headerCell: { fontSize: FontSize.xs, fontWeight: '700', color: Colors.white },
   bodyRow: {
     flexDirection: 'row',
     alignItems: 'center',
     width: '100%',
-    paddingVertical: 6,
+    paddingVertical: 4,
     paddingHorizontal: 8,
     borderTopWidth: 1,
     borderTopColor: Colors.divider,
-    minHeight: 32,
+    gap: 6,
   },
   cell: { fontSize: FontSize.xs, color: Colors.white, fontWeight: '600' },
-  vrnCol: { flex: 0.28, minWidth: 0, paddingRight: 4 },
-  vpaCol: { flex: 0.57, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 4 },
-  vpaLinkHit: { flex: 1, minWidth: 0 },
-  qrCol: { flex: 0.15, minWidth: 28, alignItems: 'flex-end' },
+  vrnCol: { width: 88, flexShrink: 0 },
+  // UPI text + copy + QR sit together with only a small gap
+  vpaCol: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  vpaLinkHit: { flexShrink: 1, minWidth: 0 },
   vpaLink: {
     fontSize: FontSize.xs,
-    color: Colors.blue,
+    color: Colors.white,
     fontWeight: '700',
     textDecorationLine: 'underline',
   },
-  qrLink: { fontSize: FontSize.xs, color: Colors.yellow, fontWeight: '800' },
   empty: {
     padding: Spacing[4],
     color: Colors.text.secondary,
@@ -231,7 +241,7 @@ const styles = StyleSheet.create({
   sheetValue: { fontSize: FontSize.lg, color: Colors.white, fontWeight: '800' },
   sheetVpa: {
     fontSize: FontSize.sm,
-    color: Colors.blue,
+    color: Colors.white,
     fontWeight: '700',
     textDecorationLine: 'underline',
     marginTop: 4,

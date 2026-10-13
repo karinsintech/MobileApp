@@ -84,8 +84,8 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         // Keep in sync with package.json; bump versionCode for every Play Store upload.
-        versionCode 38
-        versionName "2.1.9"
+        versionCode 39
+        versionName "2.1.10"
         // Placeholder for AndroidManifest usesCleartextTraffic — allow http:// to local Node in debug.
         manifestPlaceholders = [usesCleartextTraffic: "false"]
     }

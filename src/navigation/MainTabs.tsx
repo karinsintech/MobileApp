@@ -14,6 +14,7 @@ import { getLandingRoute } from '../types/auth';
 import { useHasAccess } from '../hooks/useHasAccess';
 import { TAB_PRIVILEGES, SCREEN_PRIVILEGES } from './mobilePrivileges';
 import { createPrivilegeScreen } from './createPrivilegeScreen';
+import { createServiceAccessScreen } from './createServiceAccessScreen';
 import CustomerGroupAdminGate from '../features/dashboard/components/CustomerGroupAdminGate';
 import ProfileScreen from '../features/profile/screens/ProfileScreen';
 import ChangePasswordScreen from '../features/profile/screens/ChangePasswordScreen';
@@ -95,8 +96,9 @@ const GuardedVehicleListScreen = createPrivilegeScreen(
   VehiclesScreen,
   SCREEN_PRIVILEGES.VehicleList,
 );
+// Privilege first, then enrollment gate — same order as web menu + ServiceFeatureGate.
 const GuardedChallanListScreen = createPrivilegeScreen(
-  ChallanScreen,
+  createServiceAccessScreen(ChallanScreen, 'echallan', 'eChallan'),
   SCREEN_PRIVILEGES.ChallanList,
 );
 const GuardedPaymentHistoryScreen = createPrivilegeScreen(
@@ -116,11 +118,11 @@ const GuardedProductsScreen = createPrivilegeScreen(
   SCREEN_PRIVILEGES.Products,
 );
 const GuardedRCListScreen = createPrivilegeScreen(
-  RCListScreen,
+  createServiceAccessScreen(RCListScreen, 'vahan', 'Vahan'),
   SCREEN_PRIVILEGES.RCList,
 );
 const GuardedDLListScreen = createPrivilegeScreen(
-  DLListScreen,
+  createServiceAccessScreen(DLListScreen, 'sarathi', 'Sarathi'),
   SCREEN_PRIVILEGES.DLList,
 );
 const GuardedTollSearchScreen = createPrivilegeScreen(

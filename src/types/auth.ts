@@ -127,6 +127,11 @@ export function isCustomerGroupAdmin(roleKey?: RoleKey): boolean {
   return roleKey === CUSTOMER_GROUP_ADMIN_ROLE;
 }
 
+/** Portal CUSTOMER role — receives Vahan / eChallan / Sarathi profile tabs on web. */
+export function isCustomer(roleKey?: RoleKey): boolean {
+  return roleKey === 'CUSTOMER';
+}
+
 export function requiresAdminContextPicker(roleKey?: RoleKey): boolean {
   return roleKey ? ADMIN_CONTEXT_ROLES.includes(roleKey) : false;
 }
