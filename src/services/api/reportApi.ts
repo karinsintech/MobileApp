@@ -75,10 +75,10 @@ export interface CustomerTollSummaryResponse {
 }
 
 export interface IncentiveReportQueryParams {
-  customerId?: string;
   monthRange?: string;
   year?: string;
   status?: string | number;
+  receiptNo?: string;
   pageNo?: number;
   pageSize?: number;
 }
@@ -89,6 +89,8 @@ export interface IncentiveReportRow {
   customerName?: string;
   bankName?: string;
   month?: string;
+  monthStart?: string | number;
+  monthEnd?: string | number;
   year?: string;
   debit?: string | number;
   credit?: string | number;
@@ -96,8 +98,16 @@ export interface IncentiveReportRow {
   commissionPercentage?: string | number;
   overallAmount?: string | number;
   adjustmentAmount?: string | number;
-  totalAmount?: string | number;
+  /** Payable after adjustment (overall − adjustment). */
+  amount?: string | number;
+  /** 10% TDS on payable amount. */
+  tds?: string | number;
+  /** Net payout after TDS. */
+  totalPayout?: string | number;
   transactionStatus?: string;
+  receiptNo?: string | null;
+  invoicePath?: string | null;
+  s3Response?: string | null;
   comment?: string;
   updatedAt?: string;
 }
@@ -180,4 +190,11 @@ export const reportApi = {
   /** Web CommissionReport — Excel only. */
   exportIncentiveReportExcel: (params: Record<string, string | number>) =>
     exportReportFile('/transaction/commission/export-toll-txn-incentive-data', params),
+
+  /** SETTLED incentive payment receipt PDF — current Indian FY onwards. */
+  downloadIncentiveReceipt: (id: number) =>
+    apiClient.get<ArrayBuffer>(
+      `/transaction/commission/download-incentive-receipt/${id}`,
+      { responseType: 'arraybuffer' },
+    ),
 };

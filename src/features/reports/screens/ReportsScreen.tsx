@@ -1,25 +1,32 @@
 /**
- * Reports hub — entry point for toll, wallet and incentive reports (web Fastag › Reports parity).
+ * Reports hub — entry point for toll, wallet and incentive reports
+ * (web Fastag › Reports parity). Incentive tile is gated by commission
+ * privilege + customer eligibility for mobile roles.
  */
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { LiquidBackground, GlassCard, ScreenHeader } from '../../../components';
 import { Colors, FontSize, Spacing } from '../../../theme';
+import { useAppSelector } from '../../../store';
+import { PrivilegeIds } from '../../../types/accessMenus';
+import { useHasAccess } from '../../../hooks/useHasAccess';
 import type { MoreStackParamList } from '../../../navigation/types';
+import { canShowMobileIncentiveReport } from '../constants/incentiveReportFilters';
 
 type ReportScreen = keyof Pick<
   MoreStackParamList,
   'VehicleTollSummary' | 'CustomerTollSummary' | 'IncentiveReport' | 'WalletTransactionReport'
 >;
 
-const REPORT_ITEMS: Array<{
+const BASE_REPORT_ITEMS: Array<{
   key: string;
   title: string;
   desc: string;
   screen: ReportScreen;
+  incentiveOnly?: boolean;
 }> = [
   {
     key: 'vehicle-toll-summary',
@@ -42,13 +49,27 @@ const REPORT_ITEMS: Array<{
   {
     key: 'incentive-report',
     title: 'Incentive Report',
-    desc: 'Quarterly incentive amounts, adjustments and payment status.',
+    desc: 'Quarterly incentive amounts, TDS, payout and settlement status.',
     screen: 'IncentiveReport',
+    incentiveOnly: true,
   },
 ];
 
 export default function ReportsScreen() {
   const nav = useNavigation<NativeStackNavigationProp<MoreStackParamList>>();
+  const user = useAppSelector((s) => s.auth.user);
+  const hasCommissionMenu = useHasAccess(PrivilegeIds.COMMISSION_REPORT_MENU);
+
+  const showIncentive = canShowMobileIncentiveReport({
+    roleKey: user?.roleKey,
+    eligibleForCommissionReport: user?.eligibleForCommissionReport,
+    hasCommissionMenuAccess: hasCommissionMenu,
+  });
+
+  const reportItems = useMemo(
+    () => BASE_REPORT_ITEMS.filter((item) => !item.incentiveOnly || showIncentive),
+    [showIncentive],
+  );
 
   const handleNavigate = (screen: ReportScreen) => {
     nav.navigate(screen);
@@ -58,7 +79,7 @@ export default function ReportsScreen() {
     <LiquidBackground>
       <ScreenHeader title="Fastag Reports" subtitle="Fleet toll, wallet & incentive reports" showBack />
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {REPORT_ITEMS.map((item) => (
+        {reportItems.map((item) => (
           <TouchableOpacity
             key={item.key}
             activeOpacity={0.85}

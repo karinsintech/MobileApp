@@ -33,6 +33,10 @@ export const PrivilegeIds = {
   CUSTOMER_TRANSACTION_REPORT: '231',
   REPORT: '191',
   VEHICLE_MENU: '235',
+  /** Web CommissionReport / Incentive Report menu + actions (useHasAccess COMMISSION_REPORT). */
+  COMMISSION_REPORT_MENU: '252',
+  COMMISSION_REPORT_VIEW_INVOICE: '256',
+  COMMISSION_REPORT_DELETE_INVOICE: '258',
   PRODUCT_MENU: '259',
 } as const;
 

@@ -113,6 +113,10 @@ const GuardedReportsScreen = createPrivilegeScreen(
   ReportsScreen,
   SCREEN_PRIVILEGES.Reports,
 );
+const GuardedIncentiveReportScreen = createPrivilegeScreen(
+  IncentiveReportScreen,
+  SCREEN_PRIVILEGES.IncentiveReport,
+);
 const GuardedProductsScreen = createPrivilegeScreen(
   ProductsHomeScreen,
   SCREEN_PRIVILEGES.Products,
@@ -214,7 +218,7 @@ function MoreNavigator() {
         <MoreStack.Screen name="Reports"       component={GuardedReportsScreen} />
         <MoreStack.Screen name="VehicleTollSummary" component={VehicleTollSummaryScreen} />
         <MoreStack.Screen name="CustomerTollSummary" component={CustomerTollSummaryScreen} />
-        <MoreStack.Screen name="IncentiveReport" component={IncentiveReportScreen} />
+        <MoreStack.Screen name="IncentiveReport" component={GuardedIncentiveReportScreen} />
         <MoreStack.Screen name="WalletTransactionReport" component={WalletTransactionReportScreen} />
         <MoreStack.Screen name="Products"      component={GuardedProductsScreen} />
         <MoreStack.Screen name="FAQ"           component={FAQScreen} />
