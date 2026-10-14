@@ -134,10 +134,25 @@ function buildReportParams(params: Record<string, string | number>): Record<stri
   return query;
 }
 
+/**
+ * Binary export GETs — match toll/vehicle exports.
+ * Puppeteer PDF (receipt) and large Excel files need a long timeout; the
+ * default 20s client timeout otherwise fails every time Chromium cold-starts.
+ */
+const BINARY_EXPORT_CONFIG = {
+  responseType: 'arraybuffer' as const,
+  timeout: 120_000,
+  transformResponse: [(data: unknown) => data],
+  headers: {
+    Accept:
+      'application/octet-stream, application/pdf, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, */*',
+  },
+};
+
 function exportReportFile(path: string, params: Record<string, string | number>) {
   return apiClient.get<ArrayBuffer>(path, {
     params: buildReportParams(params),
-    responseType: 'arraybuffer',
+    ...BINARY_EXPORT_CONFIG,
   });
 }
 
@@ -195,6 +210,6 @@ export const reportApi = {
   downloadIncentiveReceipt: (id: number) =>
     apiClient.get<ArrayBuffer>(
       `/transaction/commission/download-incentive-receipt/${id}`,
-      { responseType: 'arraybuffer' },
+      BINARY_EXPORT_CONFIG,
     ),
 };

@@ -9,6 +9,7 @@ import {
   ActivityIndicator, Linking, Alert,
 } from 'react-native';
 import { reportApi, type IncentiveReportRow } from '../../../services/api/reportApi';
+import { getApiErrorMessage } from '../../../services/api/client';
 import { useAppSelector } from '../../../store';
 import {
   LiquidBackground, GlassCard, SkeletonCard, EmptyState, ScreenHeader, StatusPill,
@@ -185,11 +186,19 @@ export default function IncentiveReportScreen() {
         'application/pdf',
       );
       Alert.alert('Download complete', `Receipt saved to ${location}.`);
-    } catch {
-      Alert.alert(
-        'Download failed',
-        'Could not download receipt. It may be outside the current FY or not settled yet.',
-      );
+    } catch (error) {
+      // Shared client maps some HTTP failures to sign-in copy — keep receipt-specific text.
+      const rawMessage = getApiErrorMessage(error, '');
+      const isAuthWording = /invalid mobile|sign-in|password/i.test(rawMessage);
+      const isTimeout = /timeout/i.test(rawMessage);
+      let description =
+        'Could not download receipt. It may be outside the current FY or not settled yet.';
+      if (isTimeout) {
+        description = 'Receipt download timed out. Please try again.';
+      } else if (rawMessage && !isAuthWording) {
+        description = rawMessage;
+      }
+      Alert.alert('Download failed', description);
     } finally {
       setDownloadingReceiptId(null);
     }
