@@ -1,5 +1,6 @@
 package com.karins
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -42,6 +43,26 @@ class MainActivity : ReactActivity() {
       isAppearanceLightStatusBars = false
       isAppearanceLightNavigationBars = false
     }
+    handleFleetTrayTap(intent)
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    handleFleetTrayTap(intent)
+  }
+
+  /** Tray tap from FleetTrayNotificationModule → open in-app Notifications. */
+  private fun handleFleetTrayTap(intent: Intent?) {
+    if (intent == null) return
+    if (!intent.getBooleanExtra(FleetTrayNotificationModule.EXTRA_OPEN_NOTIFICATIONS, false)) {
+      return
+    }
+    // Clear so rotation / recreate does not re-open Notifications.
+    intent.putExtra(FleetTrayNotificationModule.EXTRA_OPEN_NOTIFICATIONS, false)
+    // Flag only — JS consumes via FleetTrayNotification.consumeOpenNotificationsIntent
+    // (emit is unreliable during cold start before the bridge is up).
+    FleetTrayNotificationModule.pendingOpenNotifications = true
   }
 
   /**

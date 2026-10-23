@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, Animated, Easing, StyleSheet, Pressable, ScrollView,
-  AccessibilityInfo,
+  AccessibilityInfo, Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SystemBars } from 'react-native-edge-to-edge';
@@ -59,7 +59,12 @@ const C = {
   w34: 'rgba(255,255,255,0.82)', w30: 'rgba(255,255,255,0.80)',
   w24: 'rgba(255,255,255,0.78)',
 };
-const MONO = 'JetBrains Mono';
+// JetBrains Mono is not in Info.plist — missing faces paint blank on iOS.
+// Menlo / monospace keep tally and timestamps readable without shipping another TTF.
+const MONO = Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }) as string;
+// iOS Fabric: Animated opacity fades + LinearGradient-as-flex-parent both leave the
+// narrative blank (only the absolute bottom hint painted). Skip fades on iOS.
+const SKIP_REVEAL_ANIM = Platform.OS === 'ios';
 
 interface Props {
   onDone: () => void;
@@ -70,13 +75,29 @@ interface Props {
 function Reveal({
   delay, duration = 600, dy = 12, reduce, style, children,
 }: { delay: number; duration?: number; dy?: number; reduce: boolean; style?: object; children: React.ReactNode }) {
-  const v = useRef(new Animated.Value(reduce ? 1 : 0)).current;
+  // Plain View on iOS / Reduce Motion — never gate copy behind Animated opacity.
+  const v = useRef(new Animated.Value(reduce || SKIP_REVEAL_ANIM ? 1 : 0)).current;
   useEffect(() => {
-    if (reduce) return;
-    const a = Animated.timing(v, { toValue: 1, duration, delay, easing: Easing.out(Easing.cubic), useNativeDriver: true });
+    if (reduce || SKIP_REVEAL_ANIM) {
+      v.setValue(1);
+      return;
+    }
+    v.setValue(0);
+    const a = Animated.timing(v, {
+      toValue: 1,
+      duration,
+      delay,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    });
     a.start();
     return () => a.stop();
   }, [v, delay, duration, reduce]);
+
+  if (reduce || SKIP_REVEAL_ANIM) {
+    return <View style={style}>{children}</View>;
+  }
+
   const translateY = v.interpolate({ inputRange: [0, 1], outputRange: [dy, 0] });
   return <Animated.View style={[style, { opacity: v, transform: [{ translateY }] }]}>{children}</Animated.View>;
 }
@@ -236,6 +257,8 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
   const insets = useSafeAreaInsets();
   const dispatch = useAppDispatch();
   const { user, dashboardContext } = useAppSelector((s) => s.auth);
+  // Default false so the narrative mounts immediately — waiting on AccessibilityInfo
+  // previously left only the dark LinearGradient shell (looks like a black screen).
   const [reduce, setReduce] = useState(false);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
   const [interacted, setInteracted] = useState(false);
@@ -246,11 +269,15 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
   );
   const doneRef = useRef(false);
   const autoRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hardExitRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
 
   const ring1 = useRef(new Animated.Value(0)).current;
   const ring2 = useRef(new Animated.Value(0)).current;
   const breathe = useRef(new Animated.Value(0)).current;
-  const dawn = useRef(new Animated.Value(0)).current;
+  // Start dawn visible enough that a failed native fade cannot hide the whole palette.
+  const dawn = useRef(new Animated.Value(Platform.OS === 'ios' ? 0.35 : 0)).current;
 
   // Pull the real fleet summary so the splash figures match the dashboard. The
   // session scopes the customer; admin roles still pass an explicit customerId.
@@ -338,11 +365,22 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
   ]);
 
   const splash = useMemo(() => buildSplashData(summary), [summary]);
+  const reduceMotion = reduce === true;
 
-  // Count-ups re-run when their target changes, so they animate to the real
-  // values as soon as the summary resolves.
-  const susAmount = useCountUp(splash.highlightAmount, 700, 2600, reduce);
-  const total = useCountUp(splash.totalSaved, 1000, 4600, reduce);
+  // Count-ups re-run when their target changes. On iOS show final figures immediately
+  // so the splash is readable without waiting on delayed RAF counters.
+  const susAmount = useCountUp(
+    splash.highlightAmount,
+    700,
+    2600,
+    reduceMotion || SKIP_REVEAL_ANIM,
+  );
+  const total = useCountUp(
+    splash.totalSaved,
+    1000,
+    4600,
+    reduceMotion || SKIP_REVEAL_ANIM,
+  );
 
   const isGroupAdmin = isCustomerGroupAdmin(user?.roleKey);
   // Summary / associated-customers for CGA; plain customerName for everyone else.
@@ -356,22 +394,41 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
     ) || 'Your fleet';
   const greetingLine = `${greetingForHour()}.`;
 
-  const finish = () => { if (!doneRef.current) { doneRef.current = true; onDone(); } };
+  const finish = () => {
+    if (doneRef.current) return;
+    doneRef.current = true;
+    if (autoRef.current) { clearTimeout(autoRef.current); autoRef.current = null; }
+    if (hardExitRef.current) { clearTimeout(hardExitRef.current); hardExitRef.current = null; }
+    onDoneRef.current();
+  };
 
   useEffect(() => {
     let mounted = true;
-    AccessibilityInfo.isReduceMotionEnabled().then((r) => { if (mounted) setReduce(r); });
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((r) => { if (mounted) setReduce(!!r); })
+      .catch(() => { if (mounted) setReduce(false); });
     return () => { mounted = false; };
   }, []);
 
+  // Narrative auto-advance — iOS shows everything at once so a shorter hold is enough.
   useEffect(() => {
-    autoRef.current = setTimeout(finish, reduce ? 2400 : 7600);
+    const ms = reduceMotion ? 2400 : SKIP_REVEAL_ANIM ? 4500 : 7600;
+    autoRef.current = setTimeout(finish, ms);
     return () => { if (autoRef.current) clearTimeout(autoRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reduce]);
+  }, [reduceMotion]);
+
+  // Absolute escape hatch: even if the user opens the tally (cancels auto) and
+  // somehow never taps Continue, leave the splash so login can never soft-lock.
+  useEffect(() => {
+    hardExitRef.current = setTimeout(finish, 12000);
+    return () => { if (hardExitRef.current) clearTimeout(hardExitRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
-    if (reduce) return;
+    // Decorative loops only — skip on iOS where native-driver opacity is unreliable.
+    if (reduceMotion || SKIP_REVEAL_ANIM) return;
     const mkRing = (v: Animated.Value, delay: number) =>
       Animated.loop(Animated.sequence([
         Animated.delay(delay),
@@ -387,7 +444,7 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
     const dw = Animated.timing(dawn, { toValue: 1, duration: 1400, delay: 4200, easing: Easing.ease, useNativeDriver: true });
     r1.start(); r2.start(); br.start(); dw.start();
     return () => { r1.stop(); r2.stop(); br.stop(); dw.stop(); };
-  }, [reduce, ring1, ring2, breathe, dawn]);
+  }, [reduceMotion, ring1, ring2, breathe, dawn]);
 
   const cancelAuto = () => { if (autoRef.current) { clearTimeout(autoRef.current); autoRef.current = null; } };
   const onTapTally = () => { setInteracted(true); cancelAuto(); setBreakdownOpen((o) => !o); };
@@ -401,8 +458,18 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
     transform: [{ scale: breathe.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1.04] }) }],
   };
 
+  // Gradient is a background layer only. On iOS Fabric, LinearGradient as the flex
+  // parent often lays out absolute kids (bottom hint) but leaves ScrollView blank.
   return (
-    <LinearGradient colors={[C.bgA, C.bgB, C.bgC]} locations={[0, 0.64, 1]} useAngle angle={168} style={styles.fill}>
+    <View style={[styles.fill, { backgroundColor: C.bgB }]}>
+      <LinearGradient
+        colors={[C.bgA, C.bgB, C.bgC]}
+        locations={[0, 0.64, 1]}
+        useAngle
+        angle={168}
+        style={StyleSheet.absoluteFillObject}
+        pointerEvents="none"
+      />
       <SystemBars hidden />
 
       <View pointerEvents="none" style={styles.blueGlow}>
@@ -416,7 +483,7 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
           <Rect width={260} height={210} fill="url(#blue)" />
         </Svg>
       </View>
-      <Animated.View pointerEvents="none" style={[styles.dawnGlow, { opacity: reduce ? 1 : dawn }]}>
+      <Animated.View pointerEvents="none" style={[styles.dawnGlow, { opacity: reduceMotion || SKIP_REVEAL_ANIM ? 1 : dawn }]}>
         <Svg width={360} height={240}>
           <Defs>
             <RadialGradient id="dawn" cx="180" cy="240" rx="180" ry="150" gradientUnits="userSpaceOnUse">
@@ -429,36 +496,45 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
         </Svg>
       </Animated.View>
 
-      <Reveal delay={6900} duration={500} dy={0} reduce={reduce} style={[styles.liveSync, { top: insets.top + 12 }]}>
+      <Reveal delay={6900} duration={500} dy={0} reduce={reduceMotion} style={[styles.liveSync, { top: insets.top + 12 }]}>
         <View style={styles.liveDot} />
         <Text style={styles.liveText}>LIVE SYNC</Text>
       </Reveal>
 
       <ScrollView
         style={styles.fill}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 20 }]}
+        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 20, paddingBottom: 72 }]}
         showsVerticalScrollIndicator={false}
         scrollEnabled
       >
-        <Reveal delay={150} reduce={reduce}>
+        <Reveal delay={150} reduce={reduceMotion}>
           <Text style={styles.greeting}>{greetingLine}</Text>
         </Reveal>
-        <Reveal delay={500} reduce={reduce} style={{ marginBottom: 22 }}>
+        <Reveal delay={500} reduce={reduceMotion} style={{ marginBottom: 22 }}>
           <Text style={styles.subtitle}>
             {fleetLabel} · {splash.previousWeekday}, {splash.previousDayLabel}
           </Text>
         </Reveal>
 
-        <Reveal delay={950} reduce={reduce} style={styles.guardian}>
+        <Reveal delay={950} reduce={reduceMotion} style={styles.guardian}>
           <View style={styles.shieldWrap}>
-            {!reduce && <Animated.View style={[styles.ring, ringStyle(ring1)]} />}
-            {!reduce && <Animated.View style={[styles.ring, ringStyle(ring2)]} />}
-            <Animated.View style={[styles.shieldCore, reduce ? null : breatheStyle]}>
-              <Svg width={15} height={15} viewBox="0 0 16 16">
-                <Path d="M8 1.5l5 2v3.5c0 3.2-2.1 5.6-5 6.8-2.9-1.2-5-3.6-5-6.8V3.5l5-2z" stroke={C.greenBright} strokeWidth={1.3} fill="rgba(52,199,89,0.08)" />
-                <Path d="M5.6 8l1.7 1.7L10.6 6" stroke={C.greenBright} strokeWidth={1.4} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-              </Svg>
-            </Animated.View>
+            {!reduceMotion && !SKIP_REVEAL_ANIM && <Animated.View style={[styles.ring, ringStyle(ring1)]} />}
+            {!reduceMotion && !SKIP_REVEAL_ANIM && <Animated.View style={[styles.ring, ringStyle(ring2)]} />}
+            {!reduceMotion && !SKIP_REVEAL_ANIM ? (
+              <Animated.View style={[styles.shieldCore, breatheStyle]}>
+                <Svg width={15} height={15} viewBox="0 0 16 16">
+                  <Path d="M8 1.5l5 2v3.5c0 3.2-2.1 5.6-5 6.8-2.9-1.2-5-3.6-5-6.8V3.5l5-2z" stroke={C.greenBright} strokeWidth={1.3} fill="rgba(52,199,89,0.08)" />
+                  <Path d="M5.6 8l1.7 1.7L10.6 6" stroke={C.greenBright} strokeWidth={1.4} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                </Svg>
+              </Animated.View>
+            ) : (
+              <View style={styles.shieldCore}>
+                <Svg width={15} height={15} viewBox="0 0 16 16">
+                  <Path d="M8 1.5l5 2v3.5c0 3.2-2.1 5.6-5 6.8-2.9-1.2-5-3.6-5-6.8V3.5l5-2z" stroke={C.greenBright} strokeWidth={1.3} fill="rgba(52,199,89,0.08)" />
+                  <Path d="M5.6 8l1.7 1.7L10.6 6" stroke={C.greenBright} strokeWidth={1.4} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                </Svg>
+              </View>
+            )}
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.nightWatch}>FLEET ACTIVITY · {splash.previousDayShort.toUpperCase()}</Text>
@@ -472,7 +548,7 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
 
         <View style={styles.logList}>
           {splash.logs.map((l, i) => (
-            <Reveal key={`${l.tag}-${i}`} delay={1600 + i * 500} duration={550} reduce={reduce} style={styles.logRow}>
+            <Reveal key={`${l.tag}-${i}`} delay={1600 + i * 500} duration={550} reduce={reduceMotion} style={styles.logRow}>
               <View style={styles.checkCircle}>
                 <Svg width={11} height={11} viewBox="0 0 11 11">
                   <Path d="M2 5.5l2.5 2.5L9 3" stroke={C.green} strokeWidth={1.6} fill="none" strokeLinecap="round" strokeLinejoin="round" />
@@ -492,7 +568,7 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
           ))}
         </View>
 
-        <Reveal delay={4400} reduce={reduce} style={{ marginBottom: 20 }}>
+        <Reveal delay={4400} reduce={reduceMotion} style={{ marginBottom: 20 }}>
           <Pressable onPress={onTapTally}>
             <LinearGradient
               colors={['rgba(255,193,7,0.10)', 'rgba(255,193,7,0.03)']}
@@ -535,12 +611,12 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
           </Pressable>
         </Reveal>
 
-        <Reveal delay={5400} reduce={reduce}>
+        <Reveal delay={5400} reduce={reduceMotion}>
           <Text style={styles.payoff}>Everything was handled.{'\n'}Before you opened your eyes.</Text>
           <Text style={styles.promise}>That&apos;s not a feature. That&apos;s a promise.</Text>
         </Reveal>
 
-        <Reveal delay={6200} reduce={reduce} style={{ marginTop: 22 }}>
+        <Reveal delay={6200} reduce={reduceMotion} style={{ marginTop: 22 }}>
           <View style={styles.brandRow}>
             <Text style={styles.brandKarins}>Karins</Text>
             <Text style={styles.brandFleet}>fleet</Text>
@@ -551,14 +627,15 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
         <View style={{ height: 64 }} />
       </ScrollView>
 
-      <Reveal delay={6900} duration={600} dy={0} reduce={reduce} style={styles.bottomHintWrap}>
+      {/* Always painted — never behind a delayed Reveal, so tap-to-skip cannot soft-lock. */}
+      <View style={[styles.bottomHintWrap, { bottom: Math.max(insets.bottom, 16) + 8 }]}>
         <Pressable onPress={finish} hitSlop={16} accessibilityRole="button" accessibilityLabel="Continue to home">
           <Text style={styles.bottomHint}>
-            {interacted ? 'Continue to Dashboard →' : 'Auto-continues to Dashboard →'}
+            {interacted ? 'Continue to Dashboard →' : 'Tap or wait — continues to Dashboard →'}
           </Text>
         </Pressable>
-      </Reveal>
-    </LinearGradient>
+      </View>
+    </View>
   );
 }
 

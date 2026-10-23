@@ -64,8 +64,11 @@ export function resolveMmkvEncryptionKey(): Promise<string> {
 
     let existing: Keychain.UserCredentials | false = false;
     try {
+      // Explicit authenticationPrompt keeps iOS SecItem query values non-nil even
+      // when TurboModule reshapes options (see RNKeychainManager nil-prompt fix).
       existing = await Keychain.getGenericPassword({
         service: MMKV_KEYCHAIN_SERVICE,
+        authenticationPrompt: { title: 'Karins Fleet', cancel: 'Cancel' },
       });
     } catch {
       // Read failed (commonly: device locked). Fall through to the provisioned
@@ -85,6 +88,7 @@ export function resolveMmkvEncryptionKey(): Promise<string> {
     try {
       const marker = await Keychain.getGenericPassword({
         service: MMKV_PROVISIONED_SERVICE,
+        authenticationPrompt: { title: 'Karins Fleet', cancel: 'Cancel' },
       });
       alreadyProvisioned = Boolean(
         marker && marker.username === MMKV_PROVISIONED_USERNAME && marker.password === '1',
@@ -110,12 +114,14 @@ export function resolveMmkvEncryptionKey(): Promise<string> {
       await Keychain.setGenericPassword(MMKV_KEY_USERNAME, key, {
         service: MMKV_KEYCHAIN_SERVICE,
         accessible,
+        authenticationPrompt: { title: 'Karins Fleet', cancel: 'Cancel' },
       });
       // Sentinel readable even while locked (AFTER_FIRST_UNLOCK, same class the JWT
       // already uses) — records only that a key now exists, never the key itself.
       await Keychain.setGenericPassword(MMKV_PROVISIONED_USERNAME, '1', {
         service: MMKV_PROVISIONED_SERVICE,
         accessible: Keychain.ACCESSIBLE.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
+        authenticationPrompt: { title: 'Karins Fleet', cancel: 'Cancel' },
       });
     } catch {
       // Simulator / Appetize — encryption still applies for this process lifetime.

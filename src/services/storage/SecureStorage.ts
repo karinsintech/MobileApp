@@ -89,6 +89,7 @@ export const SecureStorage = {
         {
           service: KEYCHAIN_SERVICE,
           accessible: TOKEN_ACCESSIBLE,
+          authenticationPrompt: { title: 'Karins Fleet', cancel: 'Cancel' },
         },
       );
       return;
@@ -101,6 +102,7 @@ export const SecureStorage = {
     try {
       const creds = await Keychain.getGenericPassword({
         service: KEYCHAIN_SERVICE,
+        authenticationPrompt: { title: 'Karins Fleet', cancel: 'Cancel' },
       });
 
       if (
@@ -222,10 +224,13 @@ export const SecureStorage = {
   // ── Device ID ────────────────────────────────────────────────────────────
   async setDeviceId(id: string): Promise<void> {
     try {
+      // Always pass an options object — omit/undefined options has crashed iOS
+      // keychain reads when nested auth-prompt maps are dropped by TurboModule.
       await Keychain.setInternetCredentials(
         KEYCHAIN_KEYS.deviceId,
         KEYCHAIN_KEYS.deviceId,
         id,
+        {},
       );
     } catch {
       // Device id is optional for password login.
@@ -234,7 +239,7 @@ export const SecureStorage = {
 
   async getDeviceId(): Promise<string | null> {
     try {
-      const creds = await Keychain.getInternetCredentials(KEYCHAIN_KEYS.deviceId);
+      const creds = await Keychain.getInternetCredentials(KEYCHAIN_KEYS.deviceId, {});
       return creds ? creds.password : null;
     } catch {
       return null;

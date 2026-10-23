@@ -12,7 +12,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { View, LogBox } from 'react-native';
+import { InteractionManager, LogBox, Platform, View } from 'react-native';
 import { Provider } from 'react-redux';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -74,6 +74,15 @@ export default function App() {
           setIntegrityBlocked(true);
           return;
         }
+      }
+
+      // iOS New Arch: SecItemCopyMatching on the TurboModule queue during the first
+      // paint can abort inside Security.framework — wait for interactions so Keychain
+      // reads (MMKV key + JWT restore) run after the UI is up.
+      if (Platform.OS === 'ios') {
+        await new Promise<void>((resolve) => {
+          InteractionManager.runAfterInteractions(() => resolve());
+        });
       }
 
       const { initEncryptedMmkv } = await import('./src/services/storage/encryptedMmkv');

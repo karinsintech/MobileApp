@@ -1,0 +1,69 @@
+diff --git a/node_modules/react-native-keychain/ios/RNKeychainManager/RNKeychainManager.m b/node_modules/react-native-keychain/ios/RNKeychainManager/RNKeychainManager.m
+index 6888ff0..7d71aff 100644
+--- a/node_modules/react-native-keychain/ios/RNKeychainManager/RNKeychainManager.m
++++ b/node_modules/react-native-keychain/ios/RNKeychainManager/RNKeychainManager.m
+@@ -145,8 +145,15 @@ CFBooleanRef cloudSyncValue(NSDictionary *options)
+ 
+ NSString *authenticationPromptValue(NSDictionary *options)
+ {
+-  if (options && options[@"authenticationPrompt"] != nil && options[@"authenticationPrompt"][@"title"]) {
+-    return options[@"authenticationPrompt"][@"title"];
++  // TurboModule interop can drop or reshape nested maps — never subscript a non-dict
++  // (NSString crashes with objectForKeyedSubscript) and never return a non-string title.
++  id prompt = options ? options[@"authenticationPrompt"] : nil;
++  if (![prompt isKindOfClass:[NSDictionary class]]) {
++    return nil;
++  }
++  id title = prompt[@"title"];
++  if ([title isKindOfClass:[NSString class]] && [(NSString *)title length] > 0) {
++    return (NSString *)title;
+   }
+   return nil;
+ }
+@@ -472,16 +479,21 @@ RCT_EXPORT_METHOD(getGenericPasswordForOptions:(NSDictionary * __nullable)option
+   CFBooleanRef cloudSync = cloudSyncValue(options);
+   NSString *accessGroup = accessGroupValue(options);
+ 
++  // NSDictionary literals abort if any value is nil — only add the Face ID / Touch ID
++  // prompt when JS actually supplied a title (oblador/react-native-keychain#349).
+   NSMutableDictionary *query = [@{
+     (__bridge NSString *)kSecClass: (__bridge id)(kSecClassGenericPassword),
+     (__bridge NSString *)kSecAttrService: service,
+     (__bridge NSString *)kSecAttrSynchronizable: (__bridge id)(cloudSync),
+     (__bridge NSString *)kSecReturnAttributes: (__bridge id)kCFBooleanTrue,
+     (__bridge NSString *)kSecReturnData: (__bridge id)kCFBooleanTrue,
+-    (__bridge NSString *)kSecMatchLimit: (__bridge NSString *)kSecMatchLimitOne,
+-    (__bridge NSString *)kSecUseOperationPrompt: authenticationPrompt
++    (__bridge NSString *)kSecMatchLimit: (__bridge NSString *)kSecMatchLimitOne
+   } mutableCopy];
+ 
++  if (authenticationPrompt != nil) {
++    query[(__bridge NSString *)kSecUseOperationPrompt] = authenticationPrompt;
++  }
++
+   if (accessGroup != nil) {
+     query[(__bridge NSString *)kSecAttrAccessGroup] = accessGroup;
+   }
+@@ -584,16 +596,20 @@ RCT_EXPORT_METHOD(getInternetCredentialsForServer:(NSString *)server
+   NSString *authenticationPrompt = authenticationPromptValue(options);
+   NSString *accessGroup = accessGroupValue(options);
+   
++  // Same nil-prompt abort as getGenericPassword — build base query then attach prompt.
+   NSMutableDictionary *query = [@{
+     (__bridge NSString *)kSecClass: (__bridge id)(kSecClassInternetPassword),
+     (__bridge NSString *)kSecAttrServer: server,
+     (__bridge NSString *)kSecReturnAttributes: (__bridge id)kCFBooleanTrue,
+     (__bridge NSString *)kSecAttrSynchronizable: (__bridge id)(cloudSync),
+     (__bridge NSString *)kSecReturnData: (__bridge id)kCFBooleanTrue,
+-    (__bridge NSString *)kSecMatchLimit: (__bridge NSString *)kSecMatchLimitOne,
+-    (__bridge NSString *)kSecUseOperationPrompt: authenticationPrompt
++    (__bridge NSString *)kSecMatchLimit: (__bridge NSString *)kSecMatchLimitOne
+   } mutableCopy];
+ 
++  if (authenticationPrompt != nil) {
++    query[(__bridge NSString *)kSecUseOperationPrompt] = authenticationPrompt;
++  }
++
+   if (accessGroup != nil) {
+     query[(__bridge NSString *)kSecAttrAccessGroup] = accessGroup;
+   }

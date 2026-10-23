@@ -20,6 +20,7 @@ class MainApplication : Application(), ReactApplication {
         PackageList(this).packages.apply {
           add(BiometricAuthPackage())
           add(FileDownloadPackage())
+          add(FleetTrayNotificationPackage())
         },
     )
   }

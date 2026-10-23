@@ -11,6 +11,7 @@
  * never offers the phone lock password — alternatives are app-lock PIN only.
  */
 
+import { Platform } from 'react-native';
 import * as Keychain from 'react-native-keychain';
 import { Cache } from '../storage/SecureStorage';
 
@@ -100,12 +101,19 @@ export async function authenticateSessionUnlock(): Promise<{
 
     try {
       // ACL challenge is created only here (post-idle unlock path).
+      // Android-only securityLevel/storage must not ride along on iOS — undefined
+      // native constants + Keystore enums confuse the TurboModule options map.
       await Keychain.setGenericPassword('challenge', `c:${Date.now()}`, {
         service: UNLOCK_CHALLENGE_SERVICE,
         accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
         accessControl: ACCESS_CONTROL,
-        securityLevel: Keychain.SECURITY_LEVEL.SECURE_SOFTWARE,
-        storage: Keychain.STORAGE_TYPE.AES_GCM,
+        authenticationPrompt: { ...AUTH_PROMPT },
+        ...(Platform.OS === 'android'
+          ? {
+              securityLevel: Keychain.SECURITY_LEVEL.SECURE_SOFTWARE,
+              storage: Keychain.STORAGE_TYPE.AES_GCM,
+            }
+          : {}),
       });
 
       const creds = await Keychain.getGenericPassword({

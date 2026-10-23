@@ -16,6 +16,8 @@ import {
 import { markSessionBroadcastBaseline } from '../../../services/notifications/broadcastPushDedupe';
 import { syncBroadcastNotificationsFromApi } from '../../../services/notifications/notificationCenter';
 import { refreshNotificationInboxForSession } from '../../../services/notifications/notificationInboxRefresh';
+import { consumeFleetTrayOpenIntent } from '../../../services/notifications/fleetTrayNotification';
+import { navigateToNotificationsScreen } from '../../../services/notifications/notificationNavigation';
 import { pushService } from '../../../services/notifications/pushService';
 import { registerPushDevice } from '../../../services/notifications/registerPushDevice';
 import { useAppSelector } from '../../../store';
@@ -75,6 +77,10 @@ export function usePushNotifications(isAuthenticated: boolean): void {
         void registerPushDevice();
         // Soft refresh only — full dashboard fetch on every resume re-spammed tray + menu.
         void refreshInbox(false);
+        // Android custom-tray tap while backgrounded — open Notifications once.
+        void consumeFleetTrayOpenIntent().then((open) => {
+          if (open) navigateToNotificationsScreen();
+        });
       }
       if (state === 'background') {
         // One tray pass before the OS suspends JS — complements periodic background fetch.

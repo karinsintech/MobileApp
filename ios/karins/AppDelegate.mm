@@ -8,6 +8,7 @@
 
 #import <Firebase.h>
 #import <React/RCTBundleURLProvider.h>
+#import <ReactAppDependencyProvider/RCTAppDependencyProvider.h>
 #import <UserNotifications/UserNotifications.h>
 
 @implementation AppDelegate
@@ -17,6 +18,11 @@
   // Must match app.json `name` / AppRegistry.registerComponent — otherwise JS never mounts.
   self.moduleName = @"KarinsFleet";
   self.initialProps = @{};
+
+  // RN 0.77+ New Arch: without this, third-party Fabric components fall back to the
+  // legacy interop path and call RCTEventEmitter.receiveEvent(), which is never
+  // registered as a callable JS module (redbox / launch freeze on iOS).
+  self.dependencyProvider = [RCTAppDependencyProvider new];
 
   // Configure Firebase before any messaging/token calls from the JS layer.
   [FIRApp configure];
@@ -78,19 +84,16 @@
 
 - (void)applicationWillResignActive:(UIApplication *)application
 {
+  // Do not call [super ...] — RCTAppDelegate does not implement these selectors.
+  // [super respondsToSelector:] still returns YES (self implements them) and then
+  // doesNotRecognizeSelector crashes on become-active (Simulator SIGSEGV).
   [self showPrivacyOverlay];
-  if ([super respondsToSelector:@selector(applicationWillResignActive:)]) {
-    [super applicationWillResignActive:application];
-  }
 }
 
 - (void)applicationDidBecomeActive:(UIApplication *)application
 {
   // Native cover is snapshot-only; JS SessionPrivacyGate keeps the lock until biometry.
   [self hidePrivacyOverlay];
-  if ([super respondsToSelector:@selector(applicationDidBecomeActive:)]) {
-    [super applicationDidBecomeActive:application];
-  }
 }
 
 @end

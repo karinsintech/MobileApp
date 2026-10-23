@@ -42,6 +42,9 @@ type PinEntryMode = 'pin' | 'password';
 export function SessionPrivacyGate() {
   const insets = useSafeAreaInsets();
   const isAuthenticated = useAppSelector((s) => s.auth.isAuthenticated);
+  // Post-login emotional splash is a full-screen sibling — covering it with the
+  // privacy navy sheet looks like a blank black screen right after sign-in.
+  const showPostLoginSplash = useAppSelector((s) => s.auth.showPostLoginSplash);
   const [isCovered, setIsCovered] = useState(false);
   const [needsUnlock, setNeedsUnlock] = useState(false);
   const [isUnlocking, setIsUnlocking] = useState(false);
@@ -242,7 +245,7 @@ export function SessionPrivacyGate() {
     return () => sub.remove();
   }, [isAuthenticated]);
 
-  if (!isAuthenticated || !isCovered) return null;
+  if (!isAuthenticated || !isCovered || showPostLoginSplash) return null;
 
   const busy = isUnlocking || isPinUnlocking;
 

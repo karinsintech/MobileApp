@@ -4,10 +4,10 @@
  * Requires `android/app/google-services.json` from the Firebase console
  * (package name: com.karins). Without it, push calls no-op safely.
  *
- * Tray layout: put the full alert copy in `body` (single line) so the system
- * notification box shows the complete message without expand/collapse.
- * MessagingStyle / InboxStyle / BigText are avoided — OEMs reverse, truncate,
- * or hide content behind a chevron with those styles.
+ * Tray layout:
+ * - iOS wraps a long `body` across lines in the banner (full Vahan counts visible).
+ * - Android uses a native collapsed custom layout (FleetTrayNotificationModule) so
+ *   the full body shows without BigText expand/collapse. Notifee is the fallback.
  */
 
 import { AppState, Platform } from 'react-native';
@@ -32,6 +32,10 @@ import {
   isFirebaseMessagingAvailable,
   loadMessagingModuleForAuthStatus,
 } from './messagingProvider';
+import {
+  consumeFleetTrayOpenIntent,
+  displayFleetTrayNotification,
+} from './fleetTrayNotification';
 
 export const NOTIFICATION_CATEGORIES: readonly string[] = [
   'low_wallet',
@@ -71,15 +75,15 @@ let displayQueue: Promise<unknown> = Promise.resolve();
 let resolvedAndroidSmallIcon: string | null = null;
 
 /**
- * Flatten multi-line detail into one tray line so Android shows the full message
- * in the notification box instead of hiding lines behind expand/collapse.
+ * Tray body: flatten multi-line detail to one flowing string.
+ * iOS wraps it in the banner; Android custom layout wraps the same copy (max 3 lines).
  */
 function formatTrayBody(notification: Pick<FleetNotification, 'body' | 'detail'>): string {
   const fullText = (notification.detail ?? notification.body).trim();
   if (!fullText) return 'Karins Fleet';
-  // Keep intentional sections readable in one row (comma-separated, no BigText chevron).
   return fullText.replace(/\s*\n+\s*/g, ', ');
 }
+
 
 /** Notifee requires string data — remote keys are allow-listed before attach. */
 function toNotifeeData(
@@ -103,7 +107,7 @@ function buildAndroidDisplayOptions(
 ) {
   // Intentionally ignore imageUrl for the tray row.
   // Notifee BigPicture downloads the bitmap on the native thread and OOM-crashes
-  // low-RAM / aggressive OEMs; in-app Preview already shows the artwork safely.
+  // low-RAM / proprietary OEMs; in-app Preview already shows the artwork safely.
   void options?.imageUrl;
 
   return {
@@ -137,7 +141,10 @@ function enqueueNotifeeDisplay<T>(work: () => Promise<T>): Promise<T> {
  */
 async function displayWithSafeAndroidIcon(
   payload: Parameters<typeof notifee.displayNotification>[0],
-  options?: { onlyAlertOnce?: boolean; imageUrl?: string | null },
+  options?: {
+    onlyAlertOnce?: boolean;
+    imageUrl?: string | null;
+  },
 ): Promise<void> {
   const iconCandidates = resolvedAndroidSmallIcon
     ? [resolvedAndroidSmallIcon]
@@ -169,16 +176,12 @@ async function displayWithSafeAndroidIcon(
     await enqueueNotifeeDisplay(() =>
       notifee.displayNotification({
         ...payload,
-        android: {
-          channelId: ANDROID_CHANNEL_ID,
-          pressAction: { id: 'default' as const },
-          largeIcon: ANDROID_NOTIFICATION_LARGE_ICON,
-          circularLargeIcon: true,
-          color: ANDROID_NOTIFICATION_COLOR,
-          importance: AndroidImportance.HIGH,
-          sound: 'default',
-          onlyAlertOnce: options?.onlyAlertOnce ?? false,
-        },
+        android: buildAndroidDisplayOptions({
+          onlyAlertOnce: options?.onlyAlertOnce,
+          imageUrl: options?.imageUrl,
+          // Force default path — empty name makes Notifee skip a bad drawable.
+          smallIcon: 'ic_launcher',
+        }),
       }),
     );
   } catch {
@@ -306,22 +309,35 @@ export const pushService = {
       }
       if (!canShow) return false;
 
-      // Full detail in body (one line) — no short/collapse summary and no BigText chevron.
+      // Full detail in body — iOS wraps it; Android custom layout shows it without expand.
       const trayBody = formatTrayBody(notification);
       const imageUrl = resolveNotificationImageUrl(
         notification.image ?? notification.data?.image,
       );
+      const dataPayload = toNotifeeData({
+        category: notification.category,
+        createdAt: notification.createdAt,
+        ...(notification.data ?? {}),
+        ...(imageUrl ? { image: imageUrl } : {}),
+      });
+
+      if (Platform.OS === 'android') {
+        const shown = await displayFleetTrayNotification({
+          id: String(notification.id),
+          title: notification.title,
+          body: trayBody,
+          channelId: ANDROID_CHANNEL_ID,
+          data: dataPayload,
+        });
+        if (shown) return true;
+      }
+
       await displayWithSafeAndroidIcon(
         {
           id: String(notification.id),
           title: notification.title,
           body: trayBody,
-          data: toNotifeeData({
-            category: notification.category,
-            createdAt: notification.createdAt,
-            ...(notification.data ?? {}),
-            ...(imageUrl ? { image: imageUrl } : {}),
-          }),
+          data: dataPayload,
           ios: {
             foregroundPresentationOptions: {
               alert: true,
@@ -449,17 +465,30 @@ export const pushService = {
 
       const trayBody = formatTrayBody(mapped);
       const imageUrl = resolveNotificationImageUrl(mapped.image ?? mapped.data?.image);
+      const dataPayload = toNotifeeData({
+        ...(mapped.data ?? {}),
+        category: mapped.category,
+        createdAt: mapped.createdAt,
+        ...(imageUrl ? { image: imageUrl } : {}),
+      });
+
+      if (Platform.OS === 'android') {
+        const shown = await displayFleetTrayNotification({
+          id: String(mapped.id),
+          title: mapped.title,
+          body: trayBody,
+          channelId: ANDROID_CHANNEL_ID,
+          data: dataPayload,
+        });
+        if (shown) return;
+      }
+
       await displayWithSafeAndroidIcon(
         {
           id: String(mapped.id),
           title: mapped.title,
           body: trayBody,
-          data: toNotifeeData({
-            ...(mapped.data ?? {}),
-            category: mapped.category,
-            createdAt: mapped.createdAt,
-            ...(imageUrl ? { image: imageUrl } : {}),
-          }),
+          data: dataPayload,
           ios: {
             ...(isRemoteImageUrl(imageUrl)
               ? {
@@ -523,6 +552,11 @@ export const pushService = {
 
     if (openHandlersRegistered) return;
     openHandlersRegistered = true;
+
+    // Android custom-tray taps set a native flag — flush into Notifications screen.
+    void consumeFleetTrayOpenIntent().then((open) => {
+      if (open) navigateToNotificationsScreen();
+    });
 
     const messaging = getMessagingInstance();
     if (!messaging) return;
