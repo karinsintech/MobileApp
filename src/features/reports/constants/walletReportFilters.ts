@@ -34,6 +34,12 @@ export const EMPTY_WALLET_REPORT_FILTERS: WalletReportFilters = {
   walletType: '',
 };
 
+/** Same default period as toll summaries — avoids a blank first paint on iOS. */
+export const DEFAULT_WALLET_REPORT_FILTERS: WalletReportFilters = {
+  ...EMPTY_WALLET_REPORT_FILTERS,
+  dateRange: 'thisMonth',
+};
+
 export const WALLET_REPORT_DATE_RANGES = [
   { label: 'Today', value: 'today' as const },
   { label: 'Yesterday', value: 'yesterday' as const },

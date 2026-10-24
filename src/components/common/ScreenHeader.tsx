@@ -6,11 +6,12 @@
 
 import React, { useContext } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, useWindowDimensions,
+  View, Text, TouchableOpacity, StyleSheet, useWindowDimensions, Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NavigationContext } from '@react-navigation/native';
-import { Colors, FontSize, FontFamily, AppTypography, Spacing } from '../../theme';
+import { Colors, FontSize, FontFamily, AppTypography, Spacing, Radius } from '../../theme';
+import { ChevronLeftIcon } from '../icons';
 
 interface ScreenHeaderProps {
   title: string;
@@ -29,9 +30,16 @@ function BackButton({ onPress }: { onPress: () => void }) {
     <TouchableOpacity
       style={styles.backBtn}
       onPress={onPress}
-      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      activeOpacity={0.75}
+      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      accessibilityRole="button"
+      accessibilityLabel="Go back"
+      accessibilityHint="Returns to the previous screen"
     >
-      <Text style={styles.backArrow}>←</Text>
+      {/* Nudge left so the chevron reads centered inside the circular hit target. */}
+      <View style={styles.backIconWrap}>
+        <ChevronLeftIcon size={20} color={Colors.white} />
+      </View>
     </TouchableOpacity>
   );
 }
@@ -108,17 +116,30 @@ const styles = StyleSheet.create({
   },
   titleBlock: { flex: 1, minWidth: 0 },
   backBtn: {
-    width: 36,
-    height: 36,
-    backgroundColor: Colors.glass.bg,
+    width: 40,
+    height: 40,
+    borderRadius: Radius.full,
+    backgroundColor: Colors.glass.bgMedium,
     borderWidth: 1,
-    borderColor: Colors.glass.border,
-    borderRadius: 10,
+    borderColor: Colors.glass.borderStrong,
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
+    // Subtle depth so the control reads as tappable on dark navy headers.
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.22,
+        shadowRadius: 2,
+      },
+      android: { elevation: 2 },
+      default: {},
+    }),
   },
-  backArrow: { fontSize: 18, color: Colors.text.primary },
+  backIconWrap: {
+    marginLeft: -1,
+  },
   // Main page title follows the app-wide 24-28px semi-bold guidance.
   title: {
     ...AppTypography.mainPageTitle,

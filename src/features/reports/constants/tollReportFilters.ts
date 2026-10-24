@@ -30,6 +30,15 @@ export const EMPTY_TOLL_REPORT_FILTERS: TollReportFilters = {
   toDate: '',
 };
 
+/**
+ * Initial Fastag report scope — unfiltered monthly APIs often return an empty
+ * page until the operator picks a period (web headers default to a preset too).
+ */
+export const DEFAULT_TOLL_REPORT_FILTERS: TollReportFilters = {
+  ...EMPTY_TOLL_REPORT_FILTERS,
+  dateRange: 'thisMonth',
+};
+
 export const TOLL_REPORT_DATE_RANGES = [
   { label: 'Today', value: 'today' as const },
   { label: 'Yesterday', value: 'yesterday' as const },

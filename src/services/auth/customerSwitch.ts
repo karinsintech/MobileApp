@@ -7,8 +7,10 @@
  * (JWT only carries userId), so a fresh access token is not required for the
  * switch to take effect. Web achieves the same via page reload.
  *
- * `/auth/refreshToken` is cookie-only and unreliable on React Native, so it is
- * attempted as a best-effort UI sync and never blocks a successful set-default.
+ * `/auth/refreshToken` is cookie-only and unreliable on React Native — awaiting
+ * it made every CGA switch feel stuck for up to the full axios timeout. Mobile
+ * therefore patches the local session after set-default and never blocks on
+ * cookie refresh.
  */
 
 import { authApi } from '../api/authApi';
@@ -48,22 +50,6 @@ function buildLocalScopedSession(
   };
 }
 
-/**
- * Optional cookie refresh after set-default. Returns null when the HTTP-only
- * refresh cookie is missing (common on mobile) so the local session path runs.
- */
-async function tryCookieRefreshSession(): Promise<RefreshTokenResponse | null> {
-  try {
-    const { data } = await authApi.refreshToken();
-    if (!data?.accessToken || data.accessToken.split('.').length !== 3) {
-      return null;
-    }
-    return data;
-  } catch {
-    return null;
-  }
-}
-
 export async function switchActiveCustomer(
   selectedCustomerId: number,
 ): Promise<RefreshTokenResponse> {
@@ -80,19 +66,17 @@ export async function switchActiveCustomer(
   // Persist the chosen customer first — subsequent APIs read this from the DB.
   await authApi.setDefaultCustomer(selectedCustomerId);
 
-  // Prefer a server refresh when cookies work (web parity); otherwise keep the
-  // current Bearer token and update local defaultCustomerId for the UI.
-  const refreshed = await tryCookieRefreshSession();
-  const data = refreshed ?? buildLocalScopedSession(
+  // Do not await cookie /auth/refreshToken here. Mobile rarely has the HTTP-only
+  // refresh cookie (apiClient uses withCredentials: false), so that call sat in
+  // the failure path for ~20s and made the picker feel broken on both platforms.
+  const data = buildLocalScopedSession(
     sessionUser,
     selectedCustomerId,
     accessToken,
   );
 
-  if (data.accessToken) {
-    await SecureStorage.setAccessToken(data.accessToken);
-  }
-
+  // Same Bearer token after a local-only scope change — skip Keychain rewrite
+  // (iOS SecItem writes hitch the JS thread during the switch).
   SecureStorage.setSessionUser({
     userId: data.userId,
     roleId: data.roleId,

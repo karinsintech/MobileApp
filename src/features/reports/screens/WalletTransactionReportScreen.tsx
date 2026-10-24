@@ -1,17 +1,16 @@
 /**
  * Wallet Transaction Report — web /transaction/wallet-transaction-report parity.
+ * Ledger-only (wallet-transaction-data); recharge history stays on the Wallet menu feed.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, FlatList, StyleSheet, RefreshControl, TouchableOpacity, Alert, ActivityIndicator,
+  View, Text, FlatList, StyleSheet, RefreshControl, TouchableOpacity, Alert, ActivityIndicator, Platform,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   walletApi,
-  fetchMergedWalletReportPage,
-  mapRechargeToReportRow,
-  mergeWalletReportPages,
-  type WalletReportListItem,
+  type WalletParams,
   type WalletReportRow,
 } from '../../../services/api/walletApi';
 import { apiClient } from '../../../services/api/client';
@@ -29,7 +28,7 @@ import WalletTransactionFilterPanel from '../components/WalletTransactionFilterP
 import WalletSummaryCards, { buildWalletSummaryCards } from '../components/WalletSummaryCards';
 import WalletTransactionDetailModal from '../components/WalletTransactionDetailModal';
 import {
-  EMPTY_WALLET_REPORT_FILTERS,
+  DEFAULT_WALLET_REPORT_FILTERS,
   WALLET_PAGE_SIZE_OPTIONS,
   buildWalletReportQueryParams,
   formatWalletAmount,
@@ -57,16 +56,31 @@ function Cell({ label, value, tone }: { label: string; value: string; tone?: 'cr
   );
 }
 
+/** Stable row key so load-more does not re-append the same ledger entry. */
+function walletRowKey(row: WalletReportRow): string {
+  return `${row.txnRefNo ?? ''}-${row.txnDate ?? ''}-${row.txnAmount ?? ''}-${row.type ?? ''}`;
+}
+
+function appendWalletRows(existing: WalletReportRow[], nextPage: WalletReportRow[]): WalletReportRow[] {
+  const seen = new Set(existing.map(walletRowKey));
+  const merged = [...existing];
+  for (const row of nextPage) {
+    const key = walletRowKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(row);
+  }
+  return merged;
+}
+
 export default function WalletTransactionReportScreen() {
   const { user } = useAppSelector((s) => s.auth);
 
-  const [draftFilters, setDraftFilters] = useState<WalletReportFilters>(EMPTY_WALLET_REPORT_FILTERS);
-  const [appliedFilters, setAppliedFilters] = useState<WalletReportFilters>(EMPTY_WALLET_REPORT_FILTERS);
+  const [draftFilters, setDraftFilters] = useState<WalletReportFilters>(DEFAULT_WALLET_REPORT_FILTERS);
+  const [appliedFilters, setAppliedFilters] = useState<WalletReportFilters>(DEFAULT_WALLET_REPORT_FILTERS);
   const [customers, setCustomers] = useState<Array<{ yapEntityId: string; firstName: string }>>([]);
   const [agents, setAgents] = useState<Array<{ id: number; agentName: string }>>([]);
-  const [items, setItems] = useState<WalletReportListItem[]>([]);
-  const [walletCount, setWalletCount] = useState(0);
-  const [rechargeCount, setRechargeCount] = useState(0);
+  const [items, setItems] = useState<WalletReportRow[]>([]);
   const [total, setTotal] = useState(0);
   const [summaryCards, setSummaryCards] = useState(buildWalletSummaryCards());
   const [pageNo, setPageNo] = useState(1);
@@ -91,8 +105,7 @@ export default function WalletTransactionReportScreen() {
 
   const rangeStart = total === 0 ? 0 : 1;
   const rangeEnd = items.length;
-  const hasMore = pageNo * pageSize < walletCount || pageNo * pageSize < rechargeCount;
-  const includeRecharge = !appliedFilters.txnType;
+  const hasMore = pageNo * pageSize < total;
 
   useEffect(() => {
     (async () => {
@@ -127,30 +140,26 @@ export default function WalletTransactionReportScreen() {
     else if (mode === 'append') setLoadingMore(true);
     else setLoading(true);
 
-    const shouldIncludeRecharge = !filters.txnType;
-
     try {
-      const queryParams = buildWalletReportQueryParams(filters, page, size);
-      const merged = await fetchMergedWalletReportPage(queryParams, shouldIncludeRecharge);
+      // Web parity: wallet ledger only — never merge /transaction/recharge here.
+      const queryParams = buildWalletReportQueryParams(filters, page, size) as WalletParams;
+      const { data } = await walletApi.getTransactions(queryParams);
+      const rows = data.rows ?? [];
 
       if (mode === 'append') {
-        setItems((prev) => mergeWalletReportPages(prev, merged.items));
+        setItems((prev) => appendWalletRows(prev, rows));
       } else {
-        setItems(merged.items);
+        setItems(rows);
       }
 
-      setWalletCount(merged.walletCount);
-      setRechargeCount(shouldIncludeRecharge ? merged.rechargeCount : 0);
-      setTotal(merged.walletCount + (shouldIncludeRecharge ? merged.rechargeCount : 0));
-      setSummaryCards(buildWalletSummaryCards(merged.summaryCards));
+      setTotal(data.count ?? rows.length);
+      setSummaryCards(buildWalletSummaryCards(data.cards));
       setPageNo(page);
       setPageSize(size);
     } catch {
       if (mode !== 'append') {
         setItems([]);
         setTotal(0);
-        setWalletCount(0);
-        setRechargeCount(0);
         setSummaryCards(buildWalletSummaryCards());
       }
     } finally {
@@ -161,9 +170,11 @@ export default function WalletTransactionReportScreen() {
     }
   }, []);
 
-  useEffect(() => {
-    fetchData(appliedFilters, 1, pageSize, 'replace');
-  }, [appliedFilters, fetchData, pageSize]);
+  useFocusEffect(
+    useCallback(() => {
+      fetchData(appliedFilters, 1, pageSize, 'replace');
+    }, [appliedFilters, fetchData, pageSize]),
+  );
 
   const handleSearch = () => {
     setAppliedFilters({ ...draftFilters });
@@ -171,8 +182,8 @@ export default function WalletTransactionReportScreen() {
   };
 
   const handleReset = () => {
-    setDraftFilters(EMPTY_WALLET_REPORT_FILTERS);
-    setAppliedFilters(EMPTY_WALLET_REPORT_FILTERS);
+    setDraftFilters(DEFAULT_WALLET_REPORT_FILTERS);
+    setAppliedFilters(DEFAULT_WALLET_REPORT_FILTERS);
   };
 
   const handleSummarySelect = (dateRange: WalletReportDateRange) => {
@@ -219,50 +230,34 @@ export default function WalletTransactionReportScreen() {
     }
   };
 
-  const renderItem = ({ item, index }: { item: WalletReportListItem; index: number }) => {
-    const displayRow: WalletReportRow = item.kind === 'wallet'
-      ? item.row
-      : mapRechargeToReportRow(item.row);
-    const amounts = walletTxnAmounts(displayRow);
+  const renderItem = ({ item, index }: { item: WalletReportRow; index: number }) => {
+    const amounts = walletTxnAmounts(item);
     const serialNo = index + 1;
-    const isRecharge = item.kind === 'recharge';
 
     return (
       <TouchableOpacity
         activeOpacity={0.85}
-        onPress={() => setSelectedRecord(displayRow)}
+        onPress={() => setSelectedRecord(item)}
       >
         <GlassCard style={styles.card}>
           <View style={styles.cardHead}>
             <Text style={styles.serialNo}>#{serialNo}</Text>
-            <View style={styles.cardHeadRight}>
-              {isRecharge ? (
-                <Text style={styles.rechargeBadge}>Recharge</Text>
-              ) : null}
-              <Text style={styles.viewLink}>View ›</Text>
-            </View>
+            <Text style={styles.viewLink}>View ›</Text>
           </View>
 
           {showCustomerColumns ? (
             <View style={styles.rowPair}>
-              <Cell
-                label="Customer Name"
-                value={
-                  displayRow.customer?.firstName
-                  ?? (item.kind === 'recharge' ? item.row.customerName : undefined)
-                  ?? '—'
-                }
-              />
-              <Cell label="Customer ID" value={displayRow.customer?.yapEntityId ?? '—'} />
+              <Cell label="Customer Name" value={item.customer?.firstName ?? '—'} />
+              <Cell label="Customer ID" value={item.customer?.yapEntityId ?? '—'} />
             </View>
           ) : null}
 
           <View style={styles.rowPair}>
-            <Cell label="Txn Date Time" value={displayRow.txnDate ? fmtDateTime(displayRow.txnDate) : '—'} />
-            <Cell label="Wallet Type" value={isRecharge ? 'Recharge' : walletTypeLabel(displayRow.walletType)} />
+            <Cell label="Txn Date Time" value={item.txnDate ? fmtDateTime(item.txnDate) : '—'} />
+            <Cell label="Wallet Type" value={walletTypeLabel(item.walletType)} />
           </View>
 
-          <Cell label="Txn Type" value={displayRow.txnType ?? '—'} />
+          <Cell label="Txn Type" value={item.txnType ?? '—'} />
 
           <View style={styles.amountRow}>
             <Cell label="Credit" value={amounts.credit ?? '—'} tone={amounts.credit ? 'credit' : undefined} />
@@ -273,8 +268,8 @@ export default function WalletTransactionReportScreen() {
           </View>
 
           <View style={styles.rowPair}>
-            <Cell label="Balance" value={formatWalletAmount(displayRow.balance)} />
-            <Cell label="Txn Status" value={displayRow.txnStatus ?? '—'} />
+            <Cell label="Balance" value={formatWalletAmount(item.balance)} />
+            <Cell label="Txn Status" value={item.txnStatus ?? '—'} />
           </View>
         </GlassCard>
       </TouchableOpacity>
@@ -285,9 +280,6 @@ export default function WalletTransactionReportScreen() {
     <View style={styles.footer}>
       <Text style={styles.footerText}>
         Showing {rangeEnd === 0 ? 0 : `${rangeStart} - ${rangeEnd}`} of {total} items
-        {includeRecharge && rechargeCount > 0
-          ? ` (${walletCount} wallet · ${rechargeCount} recharge)`
-          : ''}
       </Text>
 
       <ScrollablePageSize
@@ -375,20 +367,19 @@ export default function WalletTransactionReportScreen() {
         />
       ) : null}
 
-      {loading && !refreshing ? (
-        <View style={{ padding: Spacing[4], gap: 8 }}>
+      {loading && !refreshing && items.length === 0 ? (
+        <View style={{ flex: 1, padding: Spacing[4], gap: 8 }}>
           {[1, 2, 3, 4].map((i) => <SkeletonCard key={i} />)}
         </View>
       ) : (
         <FlatList
+          style={styles.flex}
           data={items}
-          keyExtractor={(item, index) => (
-            item.kind === 'wallet'
-              ? `wallet-${item.row.txnRefNo ?? item.row.txnDate}-${index}`
-              : `recharge-${item.row.orderId ?? item.row.id}-${index}`
-          )}
+          keyExtractor={(item, index) => `${walletRowKey(item)}-${index}`}
           renderItem={renderItem}
           contentContainerStyle={styles.list}
+          removeClippedSubviews={false}
+          initialNumToRender={Platform.OS === 'ios' ? 12 : 10}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -400,7 +391,7 @@ export default function WalletTransactionReportScreen() {
             <EmptyState
               title="No wallet transactions found"
               icon="💳"
-              subtitle="Try adjusting your filters or date range. Recharge history is included when no txn-type filter is set."
+              subtitle="Try adjusting your filters or date range."
             />
           }
           ListFooterComponent={items.length > 0 ? listFooter : null}
@@ -445,6 +436,7 @@ function ScrollablePageSize({
 }
 
 const styles = StyleSheet.create({
+  flex: { flex: 1 },
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -504,17 +496,6 @@ const styles = StyleSheet.create({
   list: { paddingHorizontal: Spacing[4], paddingTop: Spacing[2], gap: 8, paddingBottom: 32 },
   card: { padding: 13, gap: 10 },
   cardHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  cardHeadRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  rechargeBadge: {
-    fontSize: FontSize.xs,
-    fontWeight: '700',
-    color: Colors.successLight,
-    backgroundColor: Colors.successBg,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 999,
-    overflow: 'hidden',
-  },
   serialNo: { fontSize: FontSize.xs, color: Colors.text.subtle, fontWeight: '700' },
   viewLink: { fontSize: FontSize.xs, color: Colors.infoLight, fontWeight: '700' },
   rowPair: { flexDirection: 'row', gap: 10 },

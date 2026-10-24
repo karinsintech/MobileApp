@@ -245,10 +245,10 @@ export default function DashboardScreen() {
     () => nav.navigate('More', { screen: 'Profile' }),
     [nav],
   );
-  const handleContextChange = useCallback(() => fetchData(true), [fetchData]);
-
   useEffect(() => {
-    // Admin roles must pick a customer first; skip the fetch until one is chosen.
+    // Admin / CGA must pick a customer first; skip the fetch until one is chosen.
+    // customerId changes from the picker already drive this effect — do not also
+    // wire onContextChange→fetchData or every switch hits the summary API twice.
     if (showCustomerPicker && !customerId) return;
     fetchData();
   }, [customerId, showCustomerPicker, fetchData]);
@@ -272,10 +272,7 @@ export default function DashboardScreen() {
           </Text>
           {showCustomerPicker ? (
             <View style={styles.customerPickerSlot}>
-              <CustomerContextDropdown
-                variant="inline"
-                onContextChange={handleContextChange}
-              />
+              <CustomerContextDropdown variant="inline" />
             </View>
           ) : (
             <Text style={styles.customerName} numberOfLines={1} ellipsizeMode="tail">

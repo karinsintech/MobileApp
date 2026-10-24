@@ -10,7 +10,7 @@ import { getApiErrorMessage } from '../../../services/api/client';
 import { useAppSelector } from '../../../store';
 import {
   LiquidBackground, GlassCard, StatusPill,
-  SkeletonCard, EmptyState, ScreenHeader,
+  SkeletonCard, EmptyState, ScreenHeader, ScrollableChipBar,
 } from '../../../components';
 import { Colors, FontSize, Spacing, Radius } from '../../../theme';
 import { formatINR, fmtDateTime } from '../../../utils/format';
@@ -543,12 +543,9 @@ export default function TollTransactionsScreen() {
       />
 
       <View style={styles.filters}>
-        <FlatList
-          horizontal
+        <ScrollableChipBar
           data={PRESET_PERIODS}
           keyExtractor={(p) => p.value}
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ gap: 8, paddingVertical: 4 }}
           renderItem={({ item }) => (
             <TouchableOpacity
               style={[
@@ -850,9 +847,9 @@ const styles = StyleSheet.create({
   chip: {
     paddingHorizontal: 14,
     paddingVertical: 7,
-    backgroundColor: Colors.glass.bg,
+    backgroundColor: Colors.glass.bgMedium,
     borderWidth: 1,
-    borderColor: Colors.glass.border,
+    borderColor: Colors.glass.borderStrong,
     borderRadius: Radius.full,
   },
   // Trailing chip in the preset row — small left gap to match the row spacing.
@@ -869,7 +866,7 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     backgroundColor: Colors.glass.bg,
     borderWidth: 1,
-    borderColor: Colors.glass.border,
+    borderColor: Colors.glass.borderStrong,
     borderRadius: Radius.md,
   },
   typeChipActive: { backgroundColor: Colors.infoBg, borderColor: Colors.infoBorder },

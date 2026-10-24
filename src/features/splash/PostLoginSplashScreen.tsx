@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, Animated, Easing, StyleSheet, Pressable, ScrollView,
-  AccessibilityInfo, Platform,
+  AccessibilityInfo, InteractionManager, Platform,
+  type StyleProp, type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SystemBars } from 'react-native-edge-to-edge';
@@ -60,11 +61,18 @@ const C = {
   w24: 'rgba(255,255,255,0.78)',
 };
 // JetBrains Mono is not in Info.plist — missing faces paint blank on iOS.
-// Menlo / monospace keep tally and timestamps readable without shipping another TTF.
+// Menlo is fine for light labels; NEVER pair it with fontWeight 700/800 on iOS
+// (Core Text can drop the glyph entirely — looks like a missing ₹ amount).
 const MONO = Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }) as string;
 // iOS Fabric: Animated opacity fades + LinearGradient-as-flex-parent both leave the
 // narrative blank (only the absolute bottom hint painted). Skip fades on iOS.
 const SKIP_REVEAL_ANIM = Platform.OS === 'ios';
+const IS_IOS = Platform.OS === 'ios';
+// Amounts use the system UI face + weight so ₹ figures always paint on iOS.
+const AMOUNT_FONT = IS_IOS ? undefined : MONO;
+// iOS New Arch: recycling LinearGradient / react-native-svg during splash→shell
+// unmount crashes in RCTComponentViewRegistry (_enqueueComponentView…).
+// Keep the narrative on plain View/Text only; Android keeps the full look.
 
 interface Props {
   onDone: () => void;
@@ -74,7 +82,14 @@ interface Props {
 
 function Reveal({
   delay, duration = 600, dy = 12, reduce, style, children,
-}: { delay: number; duration?: number; dy?: number; reduce: boolean; style?: object; children: React.ReactNode }) {
+}: {
+  delay: number;
+  duration?: number;
+  dy?: number;
+  reduce: boolean;
+  style?: StyleProp<ViewStyle>;
+  children: React.ReactNode;
+}) {
   // Plain View on iOS / Reduce Motion — never gate copy behind Animated opacity.
   const v = useRef(new Animated.Value(reduce || SKIP_REVEAL_ANIM ? 1 : 0)).current;
   useEffect(() => {
@@ -263,6 +278,9 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
   const [breakdownOpen, setBreakdownOpen] = useState(false);
   const [interacted, setInteracted] = useState(false);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  // Gate auto-advance until the summary fetch settles — otherwise iOS's short
+  // hold dismisses before logs/tally paint and the splash looks empty.
+  const [summaryReady, setSummaryReady] = useState(false);
   // CGA login customerName is the BDM account — resolve the selected fleet customer separately.
   const [groupAdminCustomerName, setGroupAdminCustomerName] = useState<string | null>(() =>
     pickFleetCustomerName(dashboardContext?.label),
@@ -281,22 +299,27 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
 
   // Pull the real fleet summary so the splash figures match the dashboard. The
   // session scopes the customer; admin roles still pass an explicit customerId.
+  // Depend on customerId (not the whole context object) so CGA label updates do
+  // not re-fetch and restart the auto-advance timer mid-read.
+  const activeCustomerId = resolveActiveCustomerId(dashboardContext, user?.defaultCustomerId);
   useEffect(() => {
     let alive = true;
+    setSummaryReady(false);
     (async () => {
       try {
         const canScopeByCustomerId = requiresAdminContextPicker(user?.roleKey);
-        const customerId = resolveActiveCustomerId(dashboardContext, user?.defaultCustomerId);
         const { data } = await dashboardApi.getSummary({
-          ...(canScopeByCustomerId && customerId ? { customerId } : {}),
+          ...(canScopeByCustomerId && activeCustomerId ? { customerId: activeCustomerId } : {}),
         });
         if (alive) setSummary(normalizeDashboardSummary(data));
       } catch {
         /* keep zeros — never show fabricated figures */
+      } finally {
+        if (alive) setSummaryReady(true);
       }
     })();
     return () => { alive = false; };
-  }, [user?.roleKey, user?.defaultCustomerId, dashboardContext]);
+  }, [user?.roleKey, activeCustomerId]);
 
   // Customer group admin: map defaultCustomerId → associated-customers name so the
   // splash subtitle shows the fleet customer, not the BDM account from sign-in.
@@ -362,6 +385,7 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
     user?.userId,
     user?.defaultCustomerId,
     dashboardContext?.customerId,
+    dashboardContext?.label,
   ]);
 
   const splash = useMemo(() => buildSplashData(summary), [summary]);
@@ -394,13 +418,17 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
     ) || 'Your fleet';
   const greetingLine = `${greetingForHour()}.`;
 
-  const finish = () => {
+  const finish = useCallback(() => {
     if (doneRef.current) return;
     doneRef.current = true;
     if (autoRef.current) { clearTimeout(autoRef.current); autoRef.current = null; }
     if (hardExitRef.current) { clearTimeout(hardExitRef.current); hardExitRef.current = null; }
-    onDoneRef.current();
-  };
+    // Defer shell mount until after the current Fabric transaction — immediate
+    // unmount of LinearGradient/Svg during mount instructions SIGSEGVs on iOS.
+    InteractionManager.runAfterInteractions(() => {
+      setTimeout(() => onDoneRef.current(), IS_IOS ? 48 : 0);
+    });
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -410,21 +438,27 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
     return () => { mounted = false; };
   }, []);
 
-  // Narrative auto-advance — iOS shows everything at once so a shorter hold is enough.
+  // Narrative auto-advance — wait until summary paints, then hold long enough on
+  // iOS to read greeting + tally (Fabric used to dismiss while amounts were blank).
   useEffect(() => {
-    const ms = reduceMotion ? 2400 : SKIP_REVEAL_ANIM ? 4500 : 7600;
-    autoRef.current = setTimeout(finish, ms);
-    return () => { if (autoRef.current) clearTimeout(autoRef.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reduceMotion]);
+    if (!summaryReady) return;
+    const ms = reduceMotion ? 3200 : IS_IOS ? 9000 : 7600;
+    // One frame after ready so tally Text commits before the clock starts.
+    const start = requestAnimationFrame(() => {
+      autoRef.current = setTimeout(finish, ms);
+    });
+    return () => {
+      cancelAnimationFrame(start);
+      if (autoRef.current) clearTimeout(autoRef.current);
+    };
+  }, [reduceMotion, summaryReady, finish]);
 
-  // Absolute escape hatch: even if the user opens the tally (cancels auto) and
-  // somehow never taps Continue, leave the splash so login can never soft-lock.
+  // Absolute escape hatch: even if the summary fetch hangs or the user opens
+  // the tally and never taps Continue, leave the splash so login never soft-locks.
   useEffect(() => {
-    hardExitRef.current = setTimeout(finish, 12000);
+    hardExitRef.current = setTimeout(finish, 20000);
     return () => { if (hardExitRef.current) clearTimeout(hardExitRef.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [finish]);
 
   useEffect(() => {
     // Decorative loops only — skip on iOS where native-driver opacity is unreliable.
@@ -458,43 +492,51 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
     transform: [{ scale: breathe.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1.04] }) }],
   };
 
-  // Gradient is a background layer only. On iOS Fabric, LinearGradient as the flex
-  // parent often lays out absolute kids (bottom hint) but leaves ScrollView blank.
+  // iOS: solid Views only (no LinearGradient / Svg) — Fabric recycle on dismiss
+  // was SIGSEGV in RCTComponentViewRegistry. Android keeps gradients + icons.
   return (
     <View style={[styles.fill, { backgroundColor: C.bgB }]}>
-      <LinearGradient
-        colors={[C.bgA, C.bgB, C.bgC]}
-        locations={[0, 0.64, 1]}
-        useAngle
-        angle={168}
-        style={StyleSheet.absoluteFillObject}
-        pointerEvents="none"
-      />
+      {IS_IOS ? (
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: C.bgA }]} pointerEvents="none" />
+      ) : (
+        <LinearGradient
+          colors={[C.bgA, C.bgB, C.bgC]}
+          locations={[0, 0.64, 1]}
+          useAngle
+          angle={168}
+          style={StyleSheet.absoluteFill}
+          pointerEvents="none"
+        />
+      )}
       <SystemBars hidden />
 
-      <View pointerEvents="none" style={styles.blueGlow}>
-        <Svg width={260} height={210}>
-          <Defs>
-            <RadialGradient id="blue" cx="130" cy="0" rx="130" ry="105" gradientUnits="userSpaceOnUse">
-              <Stop offset="0" stopColor="rgba(0,90,180,1)" stopOpacity={0.14} />
-              <Stop offset="0.7" stopColor="rgba(0,90,180,1)" stopOpacity={0} />
-            </RadialGradient>
-          </Defs>
-          <Rect width={260} height={210} fill="url(#blue)" />
-        </Svg>
-      </View>
-      <Animated.View pointerEvents="none" style={[styles.dawnGlow, { opacity: reduceMotion || SKIP_REVEAL_ANIM ? 1 : dawn }]}>
-        <Svg width={360} height={240}>
-          <Defs>
-            <RadialGradient id="dawn" cx="180" cy="240" rx="180" ry="150" gradientUnits="userSpaceOnUse">
-              <Stop offset="0" stopColor="#FFB056" stopOpacity={0.13} />
-              <Stop offset="0.4" stopColor="#FF8C3C" stopOpacity={0.05} />
-              <Stop offset="0.72" stopColor="#FF8C3C" stopOpacity={0} />
-            </RadialGradient>
-          </Defs>
-          <Rect width={360} height={240} fill="url(#dawn)" />
-        </Svg>
-      </Animated.View>
+      {!IS_IOS ? (
+        <>
+          <View pointerEvents="none" style={styles.blueGlow}>
+            <Svg width={260} height={210}>
+              <Defs>
+                <RadialGradient id="blue" cx="130" cy="0" rx="130" ry="105" gradientUnits="userSpaceOnUse">
+                  <Stop offset="0" stopColor="rgba(0,90,180,1)" stopOpacity={0.14} />
+                  <Stop offset="0.7" stopColor="rgba(0,90,180,1)" stopOpacity={0} />
+                </RadialGradient>
+              </Defs>
+              <Rect width={260} height={210} fill="url(#blue)" />
+            </Svg>
+          </View>
+          <Animated.View pointerEvents="none" style={[styles.dawnGlow, { opacity: reduceMotion ? 1 : dawn }]}>
+            <Svg width={360} height={240}>
+              <Defs>
+                <RadialGradient id="dawn" cx="180" cy="240" rx="180" ry="150" gradientUnits="userSpaceOnUse">
+                  <Stop offset="0" stopColor="#FFB056" stopOpacity={0.13} />
+                  <Stop offset="0.4" stopColor="#FF8C3C" stopOpacity={0.05} />
+                  <Stop offset="0.72" stopColor="#FF8C3C" stopOpacity={0} />
+                </RadialGradient>
+              </Defs>
+              <Rect width={360} height={240} fill="url(#dawn)" />
+            </Svg>
+          </Animated.View>
+        </>
+      ) : null}
 
       <Reveal delay={6900} duration={500} dy={0} reduce={reduceMotion} style={[styles.liveSync, { top: insets.top + 12 }]}>
         <View style={styles.liveDot} />
@@ -506,6 +548,7 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 20, paddingBottom: 72 }]}
         showsVerticalScrollIndicator={false}
         scrollEnabled
+        removeClippedSubviews={false}
       >
         <Reveal delay={150} reduce={reduceMotion}>
           <Text style={styles.greeting}>{greetingLine}</Text>
@@ -529,10 +572,15 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
               </Animated.View>
             ) : (
               <View style={styles.shieldCore}>
-                <Svg width={15} height={15} viewBox="0 0 16 16">
-                  <Path d="M8 1.5l5 2v3.5c0 3.2-2.1 5.6-5 6.8-2.9-1.2-5-3.6-5-6.8V3.5l5-2z" stroke={C.greenBright} strokeWidth={1.3} fill="rgba(52,199,89,0.08)" />
-                  <Path d="M5.6 8l1.7 1.7L10.6 6" stroke={C.greenBright} strokeWidth={1.4} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-                </Svg>
+                {/* Text glyph on iOS — Svg Path recycle during dismiss crashed Fabric. */}
+                {IS_IOS ? (
+                  <Text style={styles.shieldCheck}>✓</Text>
+                ) : (
+                  <Svg width={15} height={15} viewBox="0 0 16 16">
+                    <Path d="M8 1.5l5 2v3.5c0 3.2-2.1 5.6-5 6.8-2.9-1.2-5-3.6-5-6.8V3.5l5-2z" stroke={C.greenBright} strokeWidth={1.3} fill="rgba(52,199,89,0.08)" />
+                    <Path d="M5.6 8l1.7 1.7L10.6 6" stroke={C.greenBright} strokeWidth={1.4} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  </Svg>
+                )}
               </View>
             )}
           </View>
@@ -550,9 +598,13 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
           {splash.logs.map((l, i) => (
             <Reveal key={`${l.tag}-${i}`} delay={1600 + i * 500} duration={550} reduce={reduceMotion} style={styles.logRow}>
               <View style={styles.checkCircle}>
-                <Svg width={11} height={11} viewBox="0 0 11 11">
-                  <Path d="M2 5.5l2.5 2.5L9 3" stroke={C.green} strokeWidth={1.6} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-                </Svg>
+                {IS_IOS ? (
+                  <Text style={styles.logCheck}>✓</Text>
+                ) : (
+                  <Svg width={11} height={11} viewBox="0 0 11 11">
+                    <Path d="M2 5.5l2.5 2.5L9 3" stroke={C.green} strokeWidth={1.6} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                  </Svg>
+                )}
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.logTime}>{l.tag}</Text>
@@ -570,25 +622,35 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
 
         <Reveal delay={4400} reduce={reduceMotion} style={{ marginBottom: 20 }}>
           <Pressable onPress={onTapTally}>
-            <LinearGradient
-              colors={['rgba(255,193,7,0.10)', 'rgba(255,193,7,0.03)']}
-              start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-              style={styles.tally}
-            >
+            <View style={styles.tally}>
+              {!IS_IOS ? (
+                <LinearGradient
+                  colors={['rgba(255,193,7,0.10)', 'rgba(255,193,7,0.03)']}
+                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+                  style={StyleSheet.absoluteFill}
+                  pointerEvents="none"
+                />
+              ) : null}
               <View style={styles.tallyTop}>
-                <View style={{ flex: 1 }}>
+                <View style={{ flex: 1, paddingRight: 8 }}>
                   <Text style={styles.tallyLabel}>LOSS PREVENTED · THIS FY</Text>
                   <Text style={styles.tallySub}>recovered & saved for your fleet</Text>
                 </View>
-                <Text style={styles.tallyTotal}>{inr(total)}</Text>
+                <Text style={styles.tallyTotal} allowFontScaling={false}>
+                  {inr(total)}
+                </Text>
               </View>
 
               {splash.breakdown.length > 0 ? (
                 <View style={styles.tallyAfford}>
                   <Text style={styles.afford}>{breakdownOpen ? 'HIDE BREAKDOWN' : 'TAP TO SEE BREAKDOWN'}</Text>
-                  <Svg width={11} height={11} viewBox="0 0 12 12" style={{ transform: [{ rotate: breakdownOpen ? '180deg' : '0deg' }] }}>
-                    <Path d="M2.5 4.5L6 8l3.5-3.5" stroke="rgba(255,193,7,0.78)" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
-                  </Svg>
+                  {IS_IOS ? (
+                    <Text style={styles.affordChevron}>{breakdownOpen ? '▲' : '▼'}</Text>
+                  ) : (
+                    <Svg width={11} height={11} viewBox="0 0 12 12" style={{ transform: [{ rotate: breakdownOpen ? '180deg' : '0deg' }] }}>
+                      <Path d="M2.5 4.5L6 8l3.5-3.5" stroke="rgba(255,193,7,0.78)" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+                    </Svg>
+                  )}
                 </View>
               ) : null}
 
@@ -597,17 +659,17 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
                   {splash.breakdown.map((b) => (
                     <View key={b.label} style={styles.bdRow}>
                       <Text style={styles.bdLabel}>{b.label} <Text style={styles.bdTail}>{b.tail}</Text></Text>
-                      <Text style={styles.bdAmt}>{inr(b.amt)}</Text>
+                      <Text style={styles.bdAmt} allowFontScaling={false}>{inr(b.amt)}</Text>
                     </View>
                   ))}
                   <View style={[styles.bdRow, styles.bdTotalRow]}>
                     <Text style={styles.bdTotalLabel}>TOTAL PREVENTED</Text>
-                    <Text style={styles.bdTotalAmt}>{inr(splash.totalSaved)}</Text>
+                    <Text style={styles.bdTotalAmt} allowFontScaling={false}>{inr(splash.totalSaved)}</Text>
                   </View>
-                  <Text style={styles.bdNote}>Figures reflect your fleet's verified recoveries and savings this financial year.</Text>
+                  <Text style={styles.bdNote}>Figures reflect your fleet&apos;s verified recoveries and savings this financial year.</Text>
                 </View>
               )}
-            </LinearGradient>
+            </View>
           </Pressable>
         </Reveal>
 
@@ -662,6 +724,7 @@ const styles = StyleSheet.create({
   },
   nightWatch: { fontSize: 9.5, fontFamily: MONO, color: 'rgba(40,167,69,0.85)', letterSpacing: 1.2, marginBottom: 3 },
   guardianLine: { fontSize: 14, fontWeight: '600', color: C.w90, lineHeight: 18 },
+  shieldCheck: { fontSize: 11, fontWeight: '700', color: C.greenBright, lineHeight: 13 },
 
   logList: { gap: 14, marginBottom: 22 },
   logRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 13 },
@@ -669,15 +732,33 @@ const styles = StyleSheet.create({
     width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(40,167,69,0.12)',
     borderWidth: 1.5, borderColor: 'rgba(40,167,69,0.55)', alignItems: 'center', justifyContent: 'center', marginTop: 2,
   },
+  logCheck: { fontSize: 11, fontWeight: '700', color: C.green, lineHeight: 13 },
   logTime: { fontSize: 10, color: C.w24, fontFamily: MONO, marginBottom: 2, letterSpacing: 0.4 },
   logBody: { fontSize: 14.5, fontWeight: '500', color: C.w88, lineHeight: 19 },
   amber700: { color: C.amber, fontWeight: '700' },
+  affordChevron: { fontSize: 9, color: 'rgba(255,193,7,0.78)', fontWeight: '700' },
 
-  tally: { borderWidth: 1, borderColor: 'rgba(255,193,7,0.24)', borderRadius: 12, paddingHorizontal: 16, paddingTop: 14 },
+  tally: {
+    borderWidth: 1,
+    borderColor: 'rgba(255,193,7,0.24)',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(255,193,7,0.04)',
+  },
   tallyTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   tallyLabel: { fontSize: 10, color: C.w42, letterSpacing: 1, marginBottom: 3 },
   tallySub: { fontSize: 11.5, color: C.w34 },
-  tallyTotal: { fontSize: 27, fontWeight: '800', color: C.amber, fontFamily: MONO, letterSpacing: -0.5 },
+  // System face + weight on iOS — Menlo+800 was painting an empty amber slot.
+  tallyTotal: {
+    fontSize: 27,
+    fontWeight: '800',
+    color: C.amber,
+    ...(AMOUNT_FONT ? { fontFamily: AMOUNT_FONT } : {}),
+    letterSpacing: -0.5,
+    flexShrink: 0,
+  },
   tallyAfford: {
     marginTop: 11, borderTopWidth: 1, borderTopColor: 'rgba(255,193,7,0.14)', height: 34,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
@@ -687,10 +768,20 @@ const styles = StyleSheet.create({
   bdRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   bdLabel: { fontSize: 12, color: 'rgba(255,255,255,0.90)', flex: 1 },
   bdTail: { color: C.w42 },
-  bdAmt: { fontSize: 12.5, fontWeight: '700', color: C.amber, fontFamily: MONO },
+  bdAmt: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: C.amber,
+    ...(AMOUNT_FONT ? { fontFamily: AMOUNT_FONT } : {}),
+  },
   bdTotalRow: { marginTop: 2, paddingTop: 9, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.08)' },
   bdTotalLabel: { fontSize: 11, color: 'rgba(255,255,255,0.85)', letterSpacing: 0.4 },
-  bdTotalAmt: { fontSize: 14, fontWeight: '800', color: C.amber, fontFamily: MONO },
+  bdTotalAmt: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: C.amber,
+    ...(AMOUNT_FONT ? { fontFamily: AMOUNT_FONT } : {}),
+  },
   bdNote: { fontSize: 10, color: C.w30, lineHeight: 14, marginTop: 1 },
 
   payoff: { fontSize: 21, fontWeight: '800', color: C.white, lineHeight: 26, letterSpacing: -0.3 },

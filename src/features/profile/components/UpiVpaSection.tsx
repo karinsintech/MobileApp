@@ -64,8 +64,9 @@ export function UpiVpaSection({ items }: Props) {
         <View style={styles.table}>
           <View style={styles.headerRow}>
             <Text style={[styles.headerCell, styles.vrnCol]}>VRN</Text>
-            <View style={styles.vpaCol}>
-              <Text style={styles.headerCell}>UPI ID</Text>
+            <Text style={[styles.headerCell, styles.vpaTextCol]}>UPI ID</Text>
+            <View style={styles.copyCol} />
+            <View style={styles.qrCol}>
               <QrCodeIcon size={14} color={Colors.white} />
             </View>
           </View>
@@ -83,32 +84,35 @@ export function UpiVpaSection({ items }: Props) {
                 filtered.map((item) => (
                   <View key={String(item.vId)} style={styles.bodyRow}>
                     <Text style={[styles.cell, styles.vrnCol]} numberOfLines={1}>{item.vrn}</Text>
-                    {/* UPI + copy + QR stay packed — no stretch gap before QR */}
-                    <View style={styles.vpaCol}>
-                      <TouchableOpacity
-                        style={styles.vpaLinkHit}
-                        onPress={() => openUpiPayment(item.vpa, item.upiUrl, item.vrn)}
-                        activeOpacity={0.7}
+                    <TouchableOpacity
+                      style={styles.vpaTextCol}
+                      onPress={() => openUpiPayment(item.vpa, item.upiUrl, item.vrn)}
+                      activeOpacity={0.7}
+                    >
+                      <Text
+                        style={styles.vpaLink}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.65}
                       >
-                        <Text
-                          style={styles.vpaLink}
-                          numberOfLines={1}
-                          adjustsFontSizeToFit
-                          minimumFontScale={0.65}
-                        >
-                          {item.vpa}
-                        </Text>
-                      </TouchableOpacity>
+                        {item.vpa}
+                      </Text>
+                    </TouchableOpacity>
+                    {/* Same COL_GAP between VRN · UPI · Copy · QR on every row. */}
+                    <View style={styles.copyCol}>
                       <TouchableOpacity
                         onPress={() => { void copyText('UPI ID', item.vpa); }}
-                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                        accessibilityLabel="Copy UPI ID"
                       >
                         <CopyIcon size={14} color={Colors.white} />
                       </TouchableOpacity>
+                    </View>
+                    <View style={styles.qrCol}>
                       <TouchableOpacity
                         onPress={() => setSelected(item)}
                         activeOpacity={0.7}
-                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
                         accessibilityLabel="Show QR code"
                       >
                         <QrCodeIcon size={16} color={Colors.yellow} />
@@ -157,6 +161,11 @@ export function UpiVpaSection({ items }: Props) {
   );
 }
 
+/** Shared horizontal rhythm for VRN · UPI ID · Copy · QR. */
+const COL_GAP = 8;
+const COL_PAD = 10;
+const ICON_COL = 24;
+
 const styles = StyleSheet.create({
   sectionLabel: {
     fontSize: FontSize.base,
@@ -187,32 +196,44 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     width: '100%',
     backgroundColor: Colors.blue,
-    paddingVertical: 6,
-    paddingHorizontal: 8,
-    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: COL_PAD,
+    gap: COL_GAP,
   },
   headerCell: { fontSize: FontSize.xs, fontWeight: '700', color: Colors.white },
   bodyRow: {
     flexDirection: 'row',
     alignItems: 'center',
     width: '100%',
-    paddingVertical: 4,
-    paddingHorizontal: 8,
+    paddingVertical: 8,
+    paddingHorizontal: COL_PAD,
     borderTopWidth: 1,
     borderTopColor: Colors.divider,
-    gap: 6,
+    gap: COL_GAP,
   },
   cell: { fontSize: FontSize.xs, color: Colors.white, fontWeight: '600' },
-  vrnCol: { width: 88, flexShrink: 0 },
-  // UPI text + copy + QR sit together with only a small gap
-  vpaCol: {
+  // VRN + UPI share remaining width equally; copy/QR keep matching icon slots.
+  vrnCol: {
     flex: 1,
     minWidth: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
   },
-  vpaLinkHit: { flexShrink: 1, minWidth: 0 },
+  vpaTextCol: {
+    flex: 1,
+    minWidth: 0,
+    justifyContent: 'center',
+  },
+  copyCol: {
+    width: ICON_COL,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  qrCol: {
+    width: ICON_COL,
+    flexShrink: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   vpaLink: {
     fontSize: FontSize.xs,
     color: Colors.white,

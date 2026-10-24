@@ -74,8 +74,8 @@ export default function CustomerContextDropdown({
   // Guards the one-time load against React re-invocations / StrictMode double-mount.
   const didInitRef = useRef(false);
 
-  // Web flow: set-default-user-id → refreshToken → new scoped access token.
-  // Redux updates only AFTER refresh succeeds so screens refetch the right data.
+  // Mobile flow: set-default-user-id → local session patch (no cookie refresh).
+  // Redux updates only after set-default succeeds so screens refetch the right data.
   const activateCustomer = useCallback(async (
     customer: CustomerOption,
     notifyParent: boolean,
@@ -89,8 +89,8 @@ export default function CustomerContextDropdown({
     try {
       const session = await switchActiveCustomer(customer.customerId);
       dispatch(applyRefreshedSession(session));
-      // refreshToken returns the group-admin's own account name, not the picked
-      // customer — show the selected customer's name so the label is correct.
+      // Local/session payloads keep the group-admin account name — label the
+      // picker with the selected customer's display name instead.
       const scopedCustomerId = session.defaultCustomerId ?? customer.customerId;
       const label = customer.customerName || session.customerName;
       dispatch(setDashboardContext({
@@ -118,7 +118,8 @@ export default function CustomerContextDropdown({
     }
   }, [dispatch]);
 
-  // Restore cached/default scope and always sync the server session on launch.
+  // Restore cached/default scope. Only hit the network when Redux/session is
+  // missing or differs — force-syncing every mount made the picker laggy for CGA.
   const restoreContext = useCallback(async (list: CustomerOption[]): Promise<void> => {
     const scopedList = filterAssociatedCustomers(list, { excludeUserId: user?.userId });
     const cached = Cache.getJSON<DashboardContext>(CONTEXT_CACHE_KEY);
@@ -128,8 +129,29 @@ export default function CustomerContextDropdown({
       cached?.customerId,
     );
     if (!target) return;
-    await activateCustomer(target, false, true);
-  }, [activateCustomer, user?.defaultCustomerId, user?.userId]);
+
+    const currentId =
+      store.getState().auth.dashboardContext?.customerId
+      ?? user?.defaultCustomerId
+      ?? null;
+    if (currentId === target.customerId) {
+      // Already scoped — refresh the label locally without set-default / spinner.
+      const label = target.customerName;
+      dispatch(setDashboardContext({
+        customerId: target.customerId,
+        scopeType: 'CUSTOMER',
+        label,
+      }));
+      Cache.setJSON(CONTEXT_CACHE_KEY, {
+        customerId: target.customerId,
+        scopeType: 'CUSTOMER',
+        label,
+      });
+      return;
+    }
+
+    await activateCustomer(target, false, false);
+  }, [activateCustomer, dispatch, user?.defaultCustomerId, user?.userId]);
 
   const applyCustomerList = useCallback((rawList: CustomerOption[]) => {
     const scopedList = filterAssociatedCustomers(rawList, { excludeUserId: user?.userId });
@@ -256,12 +278,13 @@ export default function CustomerContextDropdown({
                 return (
                   <TouchableOpacity
                     style={[styles.option, isSelected && styles.optionSelected]}
-                    onPress={async () => {
-                      const ok = await activateCustomer(item, true);
-                      if (ok) {
-                        setOpen(false);
-                        setSearch('');
-                      }
+                    onPress={() => {
+                      // Close immediately so the sheet never waits on set-default;
+                      // the trigger shows a spinner while activateCustomer runs.
+                      setOpen(false);
+                      setSearch('');
+                      if (isSelected) return;
+                      void activateCustomer(item, true);
                     }}
                     activeOpacity={0.8}
                     disabled={switching}

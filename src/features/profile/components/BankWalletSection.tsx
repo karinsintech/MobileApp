@@ -2,8 +2,8 @@
  * Bank / wallet account blocks on Profile — mirrors web UserProfile wallet grids.
  */
 
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Share, Alert, type LayoutChangeEvent } from 'react-native';
+import React from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Share, Alert } from 'react-native';
 import { GlassCard } from '../../../components';
 import { CopyIcon } from '../../../components/icons';
 import { Colors, FontSize, Spacing } from '../../../theme';
@@ -38,12 +38,6 @@ async function copyAll(fields: WalletDetailField[], title: string) {
   }
 }
 
-function fontSizeToFit(text: string, columnWidth: number): number {
-  const chars = Math.max(text.trim().length, 1);
-  const width = Math.max(columnWidth, 40);
-  return Math.min(11, Math.max(7, Math.floor(width / (chars * 0.62))));
-}
-
 function DetailRow({
   label,
   yesValue,
@@ -60,18 +54,15 @@ function DetailRow({
 }) {
   const isUpiId = label === 'UPI ID';
   const expandYesOverIdfc = isUpiId && !idfcValue.trim();
-  const [colWidth, setColWidth] = useState(110);
-
-  const onColLayout = (event: LayoutChangeEvent) => {
-    const next = Math.floor(event.nativeEvent.layout.width);
-    if (next > 0 && Math.abs(next - colWidth) > 2) setColWidth(next);
-  };
+  // AccName / AccNo are long on corporate wallets — wrap instead of ellipsis so
+  // iOS shows the full account string (tap still copies via the column press).
+  const wraps = label === 'AccName' || label === 'AccNo';
 
   const renderValue = (value: string) => (
     <Text
-      style={[styles.valueText, { fontSize: fontSizeToFit(value || '—', colWidth) }]}
+      style={[styles.valueText, wraps && styles.valueTextWrap]}
       selectable
-      numberOfLines={1}
+      numberOfLines={wraps ? 4 : 1}
       allowFontScaling={false}
     >
       {value || '—'}
@@ -79,20 +70,19 @@ function DetailRow({
   );
 
   return (
-    <View style={styles.row}>
-      <Text style={styles.rowLabel} numberOfLines={1} allowFontScaling={false}>
+    <View style={[styles.row, wraps && styles.rowMultiline]}>
+      <Text style={[styles.rowLabel, wraps && styles.rowLabelMultiline]} numberOfLines={1} allowFontScaling={false}>
         {label}
       </Text>
       <TouchableOpacity
         style={[styles.valueCol, expandYesOverIdfc && styles.valueColWide]}
         onPress={onCopyYes}
         disabled={!yesValue}
-        onLayout={onColLayout}
       >
         {renderValue(yesValue)}
       </TouchableOpacity>
       {expandYesOverIdfc ? null : (
-        <TouchableOpacity style={styles.valueCol} onPress={onCopyIdfc} disabled={!idfcValue} onLayout={onColLayout}>
+        <TouchableOpacity style={styles.valueCol} onPress={onCopyIdfc} disabled={!idfcValue}>
           {renderValue(idfcValue)}
         </TouchableOpacity>
       )}
@@ -137,7 +127,7 @@ function UpiBox({
           >
             <Text
               style={[styles.upiLink, large && styles.upiLinkLarge]}
-              numberOfLines={1}
+              numberOfLines={2}
               allowFontScaling={false}
             >
               {yesUpi}
@@ -161,7 +151,7 @@ function UpiBox({
           >
             <Text
               style={[styles.upiLink, large && styles.upiLinkLarge]}
-              numberOfLines={1}
+              numberOfLines={2}
               allowFontScaling={false}
             >
               {idfcUpi}
@@ -395,6 +385,12 @@ const styles = StyleSheet.create({
     borderBottomColor: Colors.divider,
     paddingHorizontal: 6,
   },
+  // Tall rows for AccName/AccNo so wrapped digits stay fully readable on narrow iPhones.
+  rowMultiline: {
+    alignItems: 'flex-start',
+    paddingVertical: 8,
+    minHeight: 48,
+  },
   rowLabel: {
     width: 72,
     flexShrink: 0,
@@ -404,6 +400,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textAlign: 'left',
     includeFontPadding: false,
+  },
+  rowLabelMultiline: {
+    paddingTop: 2,
   },
   valueCol: {
     flex: 1,
@@ -418,6 +417,11 @@ const styles = StyleSheet.create({
     color: Colors.white,
     textAlign: 'left',
     includeFontPadding: false,
+  },
+  valueTextWrap: {
+    fontSize: 10,
+    lineHeight: 14,
+    flexShrink: 1,
   },
   valueTextLarge: {
     fontSize: FontSize.sm,

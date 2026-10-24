@@ -4,11 +4,11 @@
  * spot vehicles at risk of being non-compliant before they're flagged.
  */
 
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
-  View, Text, FlatList, StyleSheet, RefreshControl, TouchableOpacity, ScrollView,
+  View, Text, FlatList, StyleSheet, RefreshControl, TouchableOpacity, ScrollView, Platform,
 } from 'react-native';
-import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { complianceApi } from '../../../services/api/complianceApi';
 import { vehicleApi } from '../../../services/api/vehicleApi';
 import { useAppSelector } from '../../../store';
@@ -85,6 +85,7 @@ function buildRcQueryParams(
   filters: RCFilters,
   expiryFilter: RcExpiryFilter | null,
   customerId: number | null | undefined,
+  canScopeByCustomerId: boolean,
   pageNo: number,
 ) {
   const params: Record<string, string | number> = { pageNo, pageSize: PAGE_SIZE };
@@ -103,14 +104,43 @@ function buildRcQueryParams(
     params.expiryType = filters.expiryType;
   }
 
-  // Web admin customer picker sends firstName as customerName; otherwise scope by dashboard customer.
+  // Admin picker sends customerName; only staff roles pass customerId.
+  // CUSTOMER / CGA are session-scoped via set-default — sending customerId there
+  // can return an empty page from /vehicleRc/rcList.
   if (filters.customerName.trim()) {
     params.customerName = filters.customerName.trim();
-  } else if (customerId) {
+  } else if (canScopeByCustomerId && customerId) {
     params.customerId = customerId;
   }
 
   return params;
+}
+
+/** Tolerate nested list envelopes from older / alternate rcList payloads. */
+function extractRcListPayload(data: any): {
+  records: any[];
+  totalCount: number;
+  expiryCounts: RCExpiryCounts | null;
+  blacklistCount: number;
+} {
+  const root = data?.data && typeof data.data === 'object' && !Array.isArray(data.data)
+    ? data.data
+    : data;
+  const records = Array.isArray(root?.records)
+    ? root.records
+    : Array.isArray(root?.rows)
+      ? root.rows
+      : Array.isArray(root?.result)
+        ? root.result
+        : Array.isArray(root)
+          ? root
+          : [];
+  return {
+    records,
+    totalCount: Number(root?.totalCount ?? root?.count ?? records.length) || records.length,
+    expiryCounts: root?.expiryCounts ?? null,
+    blacklistCount: Number(root?.blacklistCount ?? 0) || 0,
+  };
 }
 
 function hasActiveRcFilters(filters: RCFilters, expiryFilter: RcExpiryFilter | null): boolean {
@@ -184,6 +214,8 @@ export default function RCListScreen() {
   const route = useRoute<RouteProp<MoreStackParamList, 'RCList'>>();
   const { user, dashboardContext } = useAppSelector((s) => s.auth);
   const customerId = dashboardContext?.customerId ?? user?.defaultCustomerId;
+  // Match DL list — only ADMIN / EMPLOYEE / AGENT pass an explicit customerId.
+  const canScopeByCustomerId = requiresAdminContextPicker(user?.roleKey);
 
   const [draftFilters, setDraftFilters] = useState<RCFilters>(() => buildInitialFilters(route.params));
   const [appliedFilters, setAppliedFilters] = useState<RCFilters>(() => buildInitialFilters(route.params));
@@ -202,11 +234,18 @@ export default function RCListScreen() {
   const [blacklistCount, setBlacklistCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefresh] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const fetchSeqRef = useRef(0);
 
   const filtersActive = useMemo(
     () => hasActiveRcFilters(appliedFilters, expiryFilter),
     [appliedFilters, expiryFilter],
   );
+
+  const routeVehicleNo = route.params?.vehicleNo;
+  const routeStatus = route.params?.status;
+  const routeExpiryStatus = route.params?.expiryStatus;
+  const routeExpiryType = route.params?.expiryType;
 
   useEffect(() => {
     const nextFilters = buildInitialFilters(route.params);
@@ -214,8 +253,9 @@ export default function RCListScreen() {
     setDraftFilters(nextFilters);
     setAppliedFilters(nextFilters);
     setExpiryFilter(nextExpiry);
-    if (nextExpiry || route.params?.vehicleNo || route.params?.status) setShowFilters(true);
-  }, [route.params]);
+    if (nextExpiry || routeVehicleNo || routeStatus) setShowFilters(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- synced via extracted fields
+  }, [routeVehicleNo, routeStatus, routeExpiryStatus, routeExpiryType]);
 
   useEffect(() => {
     if (!requiresAdminContextPicker(user?.roleKey)) return;
@@ -249,15 +289,19 @@ export default function RCListScreen() {
     activeExpiryFilter: RcExpiryFilter | null,
     isRefresh = false,
   ) => {
+    const seq = ++fetchSeqRef.current;
     isRefresh ? setRefresh(true) : setLoading(true);
+    setLoadError(null);
     try {
       const { data } = await complianceApi.getRCList(
-        buildRcQueryParams(filters, activeExpiryFilter, customerId, 1),
+        buildRcQueryParams(filters, activeExpiryFilter, customerId, canScopeByCustomerId, 1),
       );
+      if (seq !== fetchSeqRef.current) return;
 
+      const payload = extractRcListPayload(data);
       // VAHAN fields are prefixed rc*; surface all six expiry dates shown on web.
-      const mapped: RCItem[] = (data.records ?? []).map((row: any) => ({
-        id: String(row.id ?? row.rcRegnNo),
+      const mapped: RCItem[] = payload.records.map((row: any, index: number) => ({
+        id: String(row.id ?? row.rcRegnNo ?? index),
         vehicleNo: row.rcRegnNo ?? '—',
         ownerName: row.rcOwnerName ?? '',
         fitnessUpto: row.rcFitUpto || null,
@@ -271,16 +315,33 @@ export default function RCListScreen() {
         raw: row,
       }));
       setItems(mapped);
-      setTotal(data.totalCount ?? mapped.length);
-      setExpiryCounts(data.expiryCounts ?? null);
-      setBlacklistCount(Number(data.blacklistCount ?? 0));
-    } catch { /* handle silently — FlatList shows empty state */ }
-    finally { setLoading(false); setRefresh(false); }
-  }, [customerId]);
+      setTotal(payload.totalCount);
+      setExpiryCounts(payload.expiryCounts);
+      setBlacklistCount(payload.blacklistCount);
+    } catch (err: any) {
+      if (seq !== fetchSeqRef.current) return;
+      setItems([]);
+      setTotal(0);
+      setExpiryCounts(null);
+      setBlacklistCount(0);
+      setLoadError(err?.message ?? 'Failed to load RC list');
+    } finally {
+      if (seq === fetchSeqRef.current) {
+        setLoading(false);
+        setRefresh(false);
+      }
+    }
+  }, [canScopeByCustomerId, customerId]);
 
-  useEffect(() => {
-    fetchData(appliedFilters, expiryFilter);
-  }, [fetchData, appliedFilters, expiryFilter]);
+  useFocusEffect(
+    useCallback(() => {
+      // Defer one frame so iOS stack transition finishes before FlatList measures.
+      const task = requestAnimationFrame(() => {
+        fetchData(appliedFilters, expiryFilter);
+      });
+      return () => cancelAnimationFrame(task);
+    }, [fetchData, appliedFilters, expiryFilter]),
+  );
 
   const handleSearch = () => {
     setAppliedFilters({ ...draftFilters });
@@ -329,6 +390,7 @@ export default function RCListScreen() {
   const listHeader = (
     <ScrollView
       horizontal
+      nestedScrollEnabled
       showsHorizontalScrollIndicator={false}
       contentContainerStyle={styles.statsRow}
     >
@@ -498,36 +560,49 @@ export default function RCListScreen() {
           onReset={handleReset}
         />
       ) : null}
-      {loading ? (
-        <View style={{ padding: Spacing[4], gap: 8 }}>
-          {listHeader}
-          {[1, 2, 3, 4].map((i) => <SkeletonCard key={i} />)}
-        </View>
-      ) : (
-        <FlatList
-          data={items}
-          keyExtractor={(r) => r.id}
-          renderItem={renderItem}
-          ListHeaderComponent={listHeader}
-          contentContainerStyle={styles.list}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => fetchData(appliedFilters, expiryFilter, true)}
-              tintColor={Colors.blue}
-            />
-          }
-          ListEmptyComponent={
-            <EmptyState title="No RC records found" icon="🛡" subtitle="No registration certificates match your filters." />
-          }
-          showsVerticalScrollIndicator={false}
-        />
-      )}
+      <View style={styles.listWrap}>
+        {loading && items.length === 0 ? (
+          <View style={styles.skeletonWrap}>
+            {listHeader}
+            {[1, 2, 3, 4].map((i) => <SkeletonCard key={i} />)}
+          </View>
+        ) : (
+          <FlatList
+            style={styles.flex}
+            data={items}
+            keyExtractor={(r) => r.id}
+            renderItem={renderItem}
+            ListHeaderComponent={listHeader}
+            contentContainerStyle={[styles.list, items.length === 0 && styles.listEmpty]}
+            removeClippedSubviews={false}
+            initialNumToRender={Platform.OS === 'ios' ? 12 : 10}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={() => fetchData(appliedFilters, expiryFilter, true)}
+                tintColor={Colors.blue}
+              />
+            }
+            ListEmptyComponent={
+              <EmptyState
+                title={loadError ? 'Could not load RCs' : 'No RC records found'}
+                icon="🛡"
+                subtitle={loadError ?? 'No registration certificates match your filters.'}
+              />
+            }
+            showsVerticalScrollIndicator={false}
+          />
+        )}
+      </View>
     </LiquidBackground>
   );
 }
 
 const styles = StyleSheet.create({
+  flex: { flex: 1 },
+  listWrap: { flex: 1, minHeight: 0 },
+  skeletonWrap: { flex: 1, padding: Spacing[4], gap: 8 },
+  listEmpty: { flexGrow: 1 },
   filterBtn: {
     backgroundColor: Colors.glass.bg,
     borderWidth: 1,

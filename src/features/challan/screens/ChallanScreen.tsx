@@ -1,8 +1,8 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
-  View, Text, FlatList, StyleSheet, TouchableOpacity, RefreshControl, ActivityIndicator,
+  View, Text, FlatList, StyleSheet, TouchableOpacity, RefreshControl, ActivityIndicator, Platform,
 } from 'react-native';
-import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { challanApi } from '../../../services/api/challanApi';
 import { useAppSelector } from '../../../store';
 import { LiquidBackground, GlassCard, StatusPill, SkeletonCard, EmptyState, ScreenHeader } from '../../../components';
@@ -59,9 +59,16 @@ export default function ChallanScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [checkingStatusNo, setCheckingStatusNo] = useState<string | null>(null);
+  const fetchSeqRef = useRef(0);
 
   const fetchData = useCallback(async (isRefresh = false) => {
-    if (needsCustomerScope && !customerId) { setLoading(false); return; }
+    // Keep the skeleton up until CGA/admin context has a customer — early empty
+    // looked like "not fetching" until the operator tapped a tab/filter.
+    if (needsCustomerScope && !customerId) {
+      setLoading(true);
+      return;
+    }
+    const seq = ++fetchSeqRef.current;
     isRefresh ? setRefreshing(true) : setLoading(true);
     try {
       const statusParam = tab === 'pending' ? 'Pending' : tab === 'disposed' ? 'Disposed' : 'All';
@@ -99,6 +106,7 @@ export default function ChallanScreen() {
             pageSize: 500,
           }),
       ]);
+      if (seq !== fetchSeqRef.current) return;
 
       const rows: any[] = listRes.data.data ?? listRes.data.rows ?? [];
       const mapped = rows.map(mapChallanListRow);
@@ -125,7 +133,12 @@ export default function ChallanScreen() {
         paidAmount: disposedRows.reduce((sum: number, c:ChallanListItem) => sum + c.fineImposed, 0),
       });
     } catch { /* handle silently — FlatList shows empty state */ }
-    finally { setLoading(false); setRefreshing(false); }
+    finally {
+      if (seq === fetchSeqRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    }
   }, [tab, customerId, canScopeByCustomerId, needsCustomerScope, route.params?.initialVehicleNo, route.params?.initialChallanNo]);
 
   const {
@@ -136,7 +149,11 @@ export default function ChallanScreen() {
     handleClosePayment,
   } = useChallanPaymentFlow({ onRefresh: () => fetchData(true) });
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useFocusEffect(
+    useCallback(() => {
+      fetchData();
+    }, [fetchData]),
+  );
 
   const handlePay = (challan: ChallanListItem) => {
     if (!canPayChallan(challan.detail)) return;
@@ -236,48 +253,55 @@ export default function ChallanScreen() {
           </Text>
         </GlassCard>
       ) : null}
-      <View style={styles.tabs}>
-        {TABS.map((t) => (
-          <TouchableOpacity
-            key={t.key}
-            style={[
-              styles.tab,
-              tab === t.key && (
-                t.key === 'disposed' ? styles.tabActiveDisposed :
-                t.key === 'pending' ? styles.tabActivePending :
-                styles.tabActiveAll
-              ),
-            ]}
-            onPress={() => setTab(t.key)}
-          >
-            <Text style={[
-              styles.tabText,
-              tab === t.key && (
-                t.key === 'disposed' ? styles.tabTextActiveDisposed :
-                t.key === 'pending' ? styles.tabTextActivePending :
-                styles.tabTextActiveAll
-              ),
-            ]}>
-              {t.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-      {loading ? (
-        <View style={{ padding: Spacing[4], gap: 8 }}>
-          {[1,2,3].map((i) => <SkeletonCard key={i} />)}
+      <View style={styles.tabBar}>
+        <View style={styles.tabs}>
+          {TABS.map((t) => (
+            <TouchableOpacity
+              key={t.key}
+              style={[
+                styles.tab,
+                tab === t.key && (
+                  t.key === 'disposed' ? styles.tabActiveDisposed :
+                  t.key === 'pending' ? styles.tabActivePending :
+                  styles.tabActiveAll
+                ),
+              ]}
+              onPress={() => setTab(t.key)}
+            >
+              <Text style={[
+                styles.tabText,
+                tab === t.key && (
+                  t.key === 'disposed' ? styles.tabTextActiveDisposed :
+                  t.key === 'pending' ? styles.tabTextActivePending :
+                  styles.tabTextActiveAll
+                ),
+              ]}>
+                {t.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
         </View>
-      ) : (
-        <FlatList
-          data={challans}
-          keyExtractor={(c) => String(c.id ?? c.challanNo)}
-          renderItem={renderItem}
-          contentContainerStyle={styles.list}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => fetchData(true)} tintColor={Colors.blue} />}
-          ListEmptyComponent={<EmptyState title="No challans found" icon="📜" />}
-          showsVerticalScrollIndicator={false}
-        />
-      )}
+      </View>
+      <View style={styles.listWrap}>
+        {loading && challans.length === 0 ? (
+          <View style={styles.skeletonWrap}>
+            {[1,2,3].map((i) => <SkeletonCard key={i} />)}
+          </View>
+        ) : (
+          <FlatList
+            style={styles.flex}
+            data={challans}
+            keyExtractor={(c) => String(c.id ?? c.challanNo)}
+            renderItem={renderItem}
+            contentContainerStyle={[styles.list, challans.length === 0 && styles.listEmpty]}
+            removeClippedSubviews={false}
+            initialNumToRender={Platform.OS === 'ios' ? 12 : 10}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => fetchData(true)} tintColor={Colors.blue} />}
+            ListEmptyComponent={<EmptyState title="No challans found" icon="📜" />}
+            showsVerticalScrollIndicator={false}
+          />
+        )}
+      </View>
 
       <ChallanPaymentCheckoutModal
         checkout={checkout}
@@ -289,14 +313,38 @@ export default function ChallanScreen() {
 }
 
 const styles = StyleSheet.create({
+  flex: { flex: 1 },
+  listWrap: { flex: 1, minHeight: 0 },
+  skeletonWrap: { flex: 1, padding: Spacing[4], gap: 8 },
+  listEmpty: { flexGrow: 1 },
   alertBanner: { marginHorizontal: Spacing[4], marginBottom: 8, padding: 12, gap: 4 },
   alertText:   { fontSize: FontSize.sm, color: Colors.dangerLight, fontWeight: '700', flexShrink: 1 },
   alertAmount: { marginTop: 2 },
   alertTextClear: { color: Colors.successLight },
   // Paid total stays green even when pending alerts are red — it's settled money.
   alertPaid:   { fontSize: FontSize.sm, color: Colors.successLight, fontWeight: '700', flexShrink: 1 },
-  tabs:        { flexDirection: 'row', paddingHorizontal: Spacing[4], gap: 8, marginBottom: 8 },
-  tab:         { paddingHorizontal: 16, paddingVertical: 8, backgroundColor: Colors.glass.bg, borderWidth: 1, borderColor: Colors.glass.border, borderRadius: Radius.full },
+  // Same bordered chrome as Profile / Toll / Claims header tabs.
+  tabBar: {
+    marginHorizontal: Spacing[4],
+    marginBottom: 8,
+    paddingVertical: Spacing[2],
+    paddingHorizontal: Spacing[2],
+    borderWidth: 1,
+    borderColor: Colors.glass.borderStrong,
+    borderRadius: Radius.md,
+    backgroundColor: Colors.glass.bg,
+  },
+  tabs: { flexDirection: 'row', gap: 8 },
+  tab: {
+    flex: 1,
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: Colors.glass.bgMedium,
+    borderWidth: 1,
+    borderColor: Colors.glass.borderStrong,
+    borderRadius: Radius.full,
+  },
   tabActivePending: { backgroundColor: Colors.dangerBg, borderColor: Colors.dangerBorder },
   tabActiveDisposed: { backgroundColor: Colors.successBg, borderColor: Colors.successBorder },
   tabActiveAll: { backgroundColor: Colors.infoBg, borderColor: Colors.infoBorder },

@@ -63,8 +63,11 @@ export interface CustomerBalanceSummary {
 }
 
 export interface CustomerTollSummaryResponse {
-  count: number;
-  result: CustomerTollSummaryRow[];
+  count?: number;
+  total?: number;
+  result?: CustomerTollSummaryRow[];
+  /** Some builds return `results` instead of `result`. */
+  results?: CustomerTollSummaryRow[];
   balanceSummary?: CustomerBalanceSummary;
   cards?: {
     today?: TollReportPeriodCard;

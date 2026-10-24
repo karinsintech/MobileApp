@@ -10,3 +10,4 @@ export { UnauthorizedScreen } from './common/UnauthorizedScreen';
 export { ErrorBoundary } from './common/ErrorBoundary';
 export { PlaceholderScreen } from './common/PlaceholderScreen';
 export { AppImage } from './common/AppImage';
+export { ScrollableChipBar } from './common/ScrollableChipBar';

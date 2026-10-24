@@ -104,6 +104,13 @@ export default function DLCheckStatusModal({
   const [dobPickerOpen, setDobPickerOpen] = useState(false);
   const [DatePickerComponent, setDatePickerComponent] = useState<React.ComponentType<any> | null>(null);
 
+  const ensureDatePicker = () => {
+    if (DatePickerComponent) return;
+    import('@react-native-community/datetimepicker')
+      .then((mod) => setDatePickerComponent(() => mod.default))
+      .catch(() => { /* calendar optional */ });
+  };
+
   useEffect(() => {
     if (!visible) {
       setForm(EMPTY_FORM);
@@ -111,15 +118,13 @@ export default function DLCheckStatusModal({
       setSearchLoading(false);
       setAddLoading(false);
       setDobPickerOpen(false);
+      return;
     }
+    // Preload the native picker while the sheet is open — opening DOB mid-flow
+    // with a cold dynamic import has crashed iOS Fabric in nested Modal trees.
+    ensureDatePicker();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when sheet opens
   }, [visible]);
-
-  const ensureDatePicker = () => {
-    if (DatePickerComponent) return;
-    import('@react-native-community/datetimepicker')
-      .then((mod) => setDatePickerComponent(() => mod.default))
-      .catch(() => { /* calendar optional */ });
-  };
 
   const handleClose = () => {
     setForm(EMPTY_FORM);
@@ -147,7 +152,11 @@ export default function DLCheckStatusModal({
       // Sarathi success payloads set errorStatus to the string "false".
       // Strip Aadhaar/biometrics immediately — preview must not hold Restricted data.
       if (data?.errorStatus === 'false' && data?.errorMessage === null && data?.result) {
-        setLicenseData(sanitizeDlPayload(data.result));
+        try {
+          setLicenseData(sanitizeDlPayload(data.result));
+        } catch {
+          Alert.alert('Error', 'Could not read licence details from Sarathi');
+        }
         return;
       }
 
@@ -200,6 +209,13 @@ export default function DLCheckStatusModal({
     ? dayjs(form.dateOfBirth, 'YYYY-MM-DD').format('DD-MM-YYYY')
     : '* Date of Birth';
 
+  const openDobPicker = () => {
+    ensureDatePicker();
+    // Defer one frame so the outer sheet finishes its layout before the
+    // native UIDatePicker mounts (nested presenters crash on iOS Fabric).
+    requestAnimationFrame(() => setDobPickerOpen(true));
+  };
+
   const renderDobPicker = () => {
     if (!dobPickerOpen) return null;
 
@@ -228,6 +244,7 @@ export default function DLCheckStatusModal({
       );
     }
 
+    // Sibling Modal (not nested under the Check DL sheet) — iOS rejects stacked Modals.
     return (
       <Modal visible transparent animationType="fade" onRequestClose={() => setDobPickerOpen(false)}>
         <TouchableOpacity
@@ -238,18 +255,20 @@ export default function DLCheckStatusModal({
           <View style={styles.dateSheet}>
             <Text style={styles.pickerTitle}>Date of Birth</Text>
             {DatePickerComponent ? (
-              <DatePickerComponent
-                value={currentValue}
-                mode="date"
-                display="spinner"
-                themeVariant="dark"
-                maximumDate={new Date()}
-                onChange={(_event: any, date?: Date) => {
-                  if (date) {
-                    setForm((prev) => ({ ...prev, dateOfBirth: dayjs(date).format('YYYY-MM-DD') }));
-                  }
-                }}
-              />
+              <View style={styles.iosPickerWrap}>
+                <DatePickerComponent
+                  value={currentValue}
+                  mode="date"
+                  display="spinner"
+                  themeVariant="dark"
+                  maximumDate={new Date()}
+                  onChange={(_event: any, date?: Date) => {
+                    if (date) {
+                      setForm((prev) => ({ ...prev, dateOfBirth: dayjs(date).format('YYYY-MM-DD') }));
+                    }
+                  }}
+                />
+              </View>
             ) : (
               <Text style={styles.dateLoading}>Loading calendar…</Text>
             )}
@@ -270,170 +289,179 @@ export default function DLCheckStatusModal({
   const driverFullName = resolveDriverFullName(licenseData, form.driverName);
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={handleClose}>
-      <KeyboardAvoidingView
-        style={styles.backdrop}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    <>
+      <Modal
+        visible={visible}
+        transparent
+        animationType="slide"
+        // overFullScreen avoids iOS stacking glitches when the DOB sibling opens.
+        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
+        onRequestClose={handleClose}
       >
-        <View style={styles.sheet}>
-          <View style={styles.sheetHeader}>
-            <Text style={styles.title}>Check Driver License</Text>
-            <TouchableOpacity onPress={handleClose} hitSlop={12} accessibilityLabel="Close">
-              <Text style={styles.closeText}>✕</Text>
-            </TouchableOpacity>
+        <KeyboardAvoidingView
+          style={styles.backdrop}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.sheet}>
+            <View style={styles.sheetHeader}>
+              <Text style={styles.title}>Check Driver License</Text>
+              <TouchableOpacity onPress={handleClose} hitSlop={12} accessibilityLabel="Close">
+                <Text style={styles.closeText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.scroll}
+            >
+              <TextInput
+                style={styles.input}
+                placeholder="* DL No"
+                placeholderTextColor={Colors.text.subtle}
+                autoCapitalize="characters"
+                value={form.licenseNumber}
+                onChangeText={(licenseNumber) => setForm((prev) => ({ ...prev, licenseNumber }))}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="* Driver Name"
+                placeholderTextColor={Colors.text.subtle}
+                value={form.driverName}
+                onChangeText={(driverName) => setForm((prev) => ({ ...prev, driverName }))}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="* Mobile No"
+                placeholderTextColor={Colors.text.subtle}
+                keyboardType="phone-pad"
+                maxLength={10}
+                value={form.mobileNo}
+                onChangeText={(mobileNo) => setForm((prev) => ({
+                  ...prev,
+                  mobileNo: mobileNo.replace(/\D/g, '').slice(0, 10),
+                }))}
+              />
+
+              <TouchableOpacity
+                style={styles.select}
+                onPress={openDobPicker}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.selectLabel}>Date of Birth</Text>
+                <Text style={[
+                  styles.selectValue,
+                  !form.dateOfBirth && styles.selectPlaceholder,
+                ]}>
+                  {dobLabel}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.primaryBtn, searchLoading && styles.btnDisabled]}
+                onPress={handleCheckStatus}
+                disabled={searchLoading}
+                activeOpacity={0.85}
+              >
+                {searchLoading ? (
+                  <ActivityIndicator color={Colors.white} />
+                ) : (
+                  <Text style={styles.primaryBtnText}>Check Status</Text>
+                )}
+              </TouchableOpacity>
+
+              {licenseData ? (
+                <View style={styles.preview}>
+                  <Text style={styles.previewTitle}>Driving License Details</Text>
+
+                  <View style={styles.summaryRow}>
+                    <View style={styles.summaryCol}>
+                      <DetailRow label="DL Status" value={lic?.dlStatus} />
+                      {/* RED-tier: keep plaintext only for ADMIN; createDriver still uses unsanitized-of-mask payload. */}
+                      <DetailRow
+                        label="DL No"
+                        value={redactRedPii(lic?.dlLicno, user?.roleKey, maskDlNumber)}
+                      />
+                      <DetailRow label="Driver Name" value={driverFullName} />
+                      <DetailRow label="Issue Date" value={fmtDate(lic?.dlIssuedt)} />
+                      <DetailRow
+                        label="Issuing Office"
+                        value={lic?.omRtoFullname || lic?.olaName}
+                      />
+                    </View>
+                  </View>
+
+                  <Text style={styles.sectionTitle}>Endorsement & Transaction Details</Text>
+                  <TableHeader cols={['Endorsed Date', 'Endorsed Office', 'Last Transaction']} />
+                  <View style={styles.tableRow}>
+                    <Text style={styles.tableCell}>{fmtDate(lic?.dlEndorsedt)}</Text>
+                    <Text style={styles.tableCell}>{lic?.dlEndorseAuth || '—'}</Text>
+                    <Text style={styles.tableCell}>
+                      {licenseData.serviceHistory?.[0]?.trName || '—'}
+                    </Text>
+                  </View>
+
+                  <Text style={styles.sectionTitle}>Validity Periods</Text>
+                  <TableHeader cols={['Type', 'From Date', 'To Date']} />
+                  {[
+                    { type: 'No Transport', from: lic?.dlNtValdfrDt, to: lic?.dlNtValdtoDt },
+                    { type: 'Transport', from: lic?.dlTrValdfrDt, to: lic?.dlTrValdtoDt },
+                    { type: 'Hazardous', from: lic?.dlHzValdfrDt, to: lic?.dlHzValdtoDt },
+                  ].map((row) => (
+                    <View key={row.type} style={styles.tableRow}>
+                      <Text style={styles.tableCell}>{row.type}</Text>
+                      <Text style={styles.tableCell}>{fmtDate(row.from)}</Text>
+                      <Text style={styles.tableCell}>{fmtDate(row.to)}</Text>
+                    </View>
+                  ))}
+
+                  {Array.isArray(licenseData.authorizedVehicles)
+                    && licenseData.authorizedVehicles.length > 0 ? (
+                    <>
+                      <Text style={styles.sectionTitle}>Class of Vehicle (COV)</Text>
+                      <TableHeader cols={['Category', 'Class of Vehicles', 'Issued Date']} />
+                      {licenseData.authorizedVehicles.map((vehicle, idx) => (
+                        <View key={`${vehicle.vecatg}-${idx}`} style={styles.tableRow}>
+                          <Text style={styles.tableCell}>{vehicle.vecatg || '—'}</Text>
+                          <Text style={styles.tableCell}>{vehicle.covdesc || '—'}</Text>
+                          <Text style={styles.tableCell}>
+                            {fmtDate(vehicle.dcIssuedt || vehicle.covIssuedt)}
+                          </Text>
+                        </View>
+                      ))}
+                    </>
+                  ) : null}
+
+                  <View style={styles.previewActions}>
+                    <TouchableOpacity
+                      style={styles.secondaryBtn}
+                      onPress={handleClose}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.secondaryBtnText}>Close</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.primaryBtn, styles.addBtn, addLoading && styles.btnDisabled]}
+                      onPress={handleAdd}
+                      disabled={addLoading}
+                      activeOpacity={0.85}
+                    >
+                      {addLoading ? (
+                        <ActivityIndicator color={Colors.white} />
+                      ) : (
+                        <Text style={styles.primaryBtnText}>Add</Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : null}
+            </ScrollView>
           </View>
-
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.scroll}
-          >
-            <TextInput
-              style={styles.input}
-              placeholder="* DL No"
-              placeholderTextColor={Colors.text.subtle}
-              autoCapitalize="characters"
-              value={form.licenseNumber}
-              onChangeText={(licenseNumber) => setForm((prev) => ({ ...prev, licenseNumber }))}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="* Driver Name"
-              placeholderTextColor={Colors.text.subtle}
-              value={form.driverName}
-              onChangeText={(driverName) => setForm((prev) => ({ ...prev, driverName }))}
-            />
-            <TextInput
-              style={styles.input}
-              placeholder="* Mobile No"
-              placeholderTextColor={Colors.text.subtle}
-              keyboardType="phone-pad"
-              maxLength={10}
-              value={form.mobileNo}
-              onChangeText={(mobileNo) => setForm((prev) => ({
-                ...prev,
-                mobileNo: mobileNo.replace(/\D/g, '').slice(0, 10),
-              }))}
-            />
-
-            <TouchableOpacity
-              style={styles.select}
-              onPress={() => { ensureDatePicker(); setDobPickerOpen(true); }}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.selectLabel}>Date of Birth</Text>
-              <Text style={[
-                styles.selectValue,
-                !form.dateOfBirth && styles.selectPlaceholder,
-              ]}>
-                {dobLabel}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.primaryBtn, searchLoading && styles.btnDisabled]}
-              onPress={handleCheckStatus}
-              disabled={searchLoading}
-              activeOpacity={0.85}
-            >
-              {searchLoading ? (
-                <ActivityIndicator color={Colors.white} />
-              ) : (
-                <Text style={styles.primaryBtnText}>Check Status</Text>
-              )}
-            </TouchableOpacity>
-
-            {licenseData ? (
-              <View style={styles.preview}>
-                <Text style={styles.previewTitle}>Driving License Details</Text>
-
-                <View style={styles.summaryRow}>
-                  <View style={styles.summaryCol}>
-                    <DetailRow label="DL Status" value={lic?.dlStatus} />
-                    {/* RED-tier: keep plaintext only for ADMIN; createDriver still uses unsanitized-of-mask payload. */}
-                    <DetailRow
-                      label="DL No"
-                      value={redactRedPii(lic?.dlLicno, user?.roleKey, maskDlNumber)}
-                    />
-                    <DetailRow label="Driver Name" value={driverFullName} />
-                    <DetailRow label="Issue Date" value={fmtDate(lic?.dlIssuedt)} />
-                    <DetailRow
-                      label="Issuing Office"
-                      value={lic?.omRtoFullname || lic?.olaName}
-                    />
-                  </View>
-                </View>
-
-                <Text style={styles.sectionTitle}>Endorsement & Transaction Details</Text>
-                <TableHeader cols={['Endorsed Date', 'Endorsed Office', 'Last Transaction']} />
-                <View style={styles.tableRow}>
-                  <Text style={styles.tableCell}>{fmtDate(lic?.dlEndorsedt)}</Text>
-                  <Text style={styles.tableCell}>{lic?.dlEndorseAuth || '—'}</Text>
-                  <Text style={styles.tableCell}>
-                    {licenseData.serviceHistory?.[0]?.trName || '—'}
-                  </Text>
-                </View>
-
-                <Text style={styles.sectionTitle}>Validity Periods</Text>
-                <TableHeader cols={['Type', 'From Date', 'To Date']} />
-                {[
-                  { type: 'No Transport', from: lic?.dlNtValdfrDt, to: lic?.dlNtValdtoDt },
-                  { type: 'Transport', from: lic?.dlTrValdfrDt, to: lic?.dlTrValdtoDt },
-                  { type: 'Hazardous', from: lic?.dlHzValdfrDt, to: lic?.dlHzValdtoDt },
-                ].map((row) => (
-                  <View key={row.type} style={styles.tableRow}>
-                    <Text style={styles.tableCell}>{row.type}</Text>
-                    <Text style={styles.tableCell}>{fmtDate(row.from)}</Text>
-                    <Text style={styles.tableCell}>{fmtDate(row.to)}</Text>
-                  </View>
-                ))}
-
-                {Array.isArray(licenseData.authorizedVehicles)
-                  && licenseData.authorizedVehicles.length > 0 ? (
-                  <>
-                    <Text style={styles.sectionTitle}>Class of Vehicle (COV)</Text>
-                    <TableHeader cols={['Category', 'Class of Vehicles', 'Issued Date']} />
-                    {licenseData.authorizedVehicles.map((vehicle, idx) => (
-                      <View key={`${vehicle.vecatg}-${idx}`} style={styles.tableRow}>
-                        <Text style={styles.tableCell}>{vehicle.vecatg || '—'}</Text>
-                        <Text style={styles.tableCell}>{vehicle.covdesc || '—'}</Text>
-                        <Text style={styles.tableCell}>
-                          {fmtDate(vehicle.dcIssuedt || vehicle.covIssuedt)}
-                        </Text>
-                      </View>
-                    ))}
-                  </>
-                ) : null}
-
-                <View style={styles.previewActions}>
-                  <TouchableOpacity
-                    style={styles.secondaryBtn}
-                    onPress={handleClose}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.secondaryBtnText}>Close</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.primaryBtn, styles.addBtn, addLoading && styles.btnDisabled]}
-                    onPress={handleAdd}
-                    disabled={addLoading}
-                    activeOpacity={0.85}
-                  >
-                    {addLoading ? (
-                      <ActivityIndicator color={Colors.white} />
-                    ) : (
-                      <Text style={styles.primaryBtnText}>Add</Text>
-                    )}
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ) : null}
-          </ScrollView>
-        </View>
-      </KeyboardAvoidingView>
+        </KeyboardAvoidingView>
+      </Modal>
 
       {renderDobPicker()}
-    </Modal>
+    </>
   );
 }
 
@@ -583,5 +611,12 @@ const styles = StyleSheet.create({
     color: Colors.text.subtle,
     textAlign: 'center',
     paddingVertical: Spacing[4],
+  },
+  // Bounded height stops UIDatePicker from expanding unbound inside the sheet
+  // (known freeze/crash on iOS when the picker has no explicit container size).
+  iosPickerWrap: {
+    height: 216,
+    justifyContent: 'center',
+    overflow: 'hidden',
   },
 });

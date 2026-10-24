@@ -4,12 +4,12 @@
  * mirrors web privilege 213.
  */
 
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View, Text, FlatList, StyleSheet, RefreshControl,
-  TouchableOpacity, ScrollView,
+  TouchableOpacity, ScrollView, Platform,
 } from 'react-native';
-import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { complianceApi } from '../../../services/api/complianceApi';
 import { vehicleApi } from '../../../services/api/vehicleApi';
 import { useAppSelector } from '../../../store';
@@ -196,11 +196,19 @@ export default function DLListScreen() {
   const [expiryCounts, setExpiryCounts] = useState<DLExpiryCounts | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Drop stale responses when route deep-link + mount fire overlapping fetches.
+  const fetchSeqRef = useRef(0);
 
   const filtersActive = useMemo(
     () => hasActiveDlFilters(appliedFilters, expiryFilter),
     [appliedFilters, expiryFilter],
   );
+
+  // Stabilize deep-link sync — route.params object identity changes on every focus.
+  const routeLicenseNo = route.params?.licenseNo;
+  const routeDriverName = route.params?.driverName;
+  const routeExpiryStatus = route.params?.expiryStatus;
+  const routeExpiryType = route.params?.expiryType;
 
   useEffect(() => {
     const nextFilters = buildInitialFilters(route.params);
@@ -208,10 +216,12 @@ export default function DLListScreen() {
     setDraftFilters(nextFilters);
     setAppliedFilters(nextFilters);
     setExpiryFilter(nextExpiry);
-    if (nextExpiry || route.params?.licenseNo || route.params?.driverName) {
+    if (nextExpiry || routeLicenseNo || routeDriverName) {
       setShowFilters(true);
     }
-  }, [route.params]);
+    // Primitives only — route.params identity churn would re-fetch on every focus.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- synced via extracted fields
+  }, [routeLicenseNo, routeDriverName, routeExpiryStatus, routeExpiryType]);
 
   useEffect(() => {
     if (!requiresAdminContextPicker(user?.roleKey)) return;
@@ -232,44 +242,72 @@ export default function DLListScreen() {
     activeExpiryFilter: DLExpiryFilter | null,
     isRefresh = false,
   ) => {
+    const seq = ++fetchSeqRef.current;
     isRefresh ? setRefreshing(true) : setLoading(true);
     try {
       const { data } = await complianceApi.getDLList(
         buildDlQueryParams(filters, activeExpiryFilter, customerId, canScopeByCustomerId, 1),
       );
+      if (seq !== fetchSeqRef.current) return;
 
-      const mapped: DLItem[] = (data.records ?? []).map((row: any, index: number) => {
-        // Strip Aadhaar/biometrics before they enter list state or navigation params.
-        const rawDetail: DLDetailPayload | null = row.fullResponse?.result ?? row.fullResponse ?? null;
-        const detail = rawDetail ? sanitizeDlPayload(rawDetail) : null;
-        const rawDlNo = (row.dlLicno ?? '—').trim();
-        return {
-          id: String(row.id ?? row.dlLicno ?? index),
-          recordId: Number(row.id) || index,
-          // RED-tier: only ADMIN keeps the full licence number on the list card.
-          dlNo: rawDlNo === '—'
-            ? rawDlNo
-            : redactRedPii(rawDlNo, user?.roleKey, maskDlNumber),
-          driverName: resolveDriverFullName(detail, row.driverName, row.bioFirstName),
-          transportUpto: row.dlTrValdtoDt || null,
-          nonTransportUpto: row.dlNtValdtoDt || null,
-          hazardousUpto: row.dlHzValdtoDt || null,
-          hillsUpto: row.dlHlValdtoDt || null,
-          status: row.dlStatus ?? '',
-          detail,
-        };
+      const mapped: DLItem[] = [];
+      (data.records ?? []).forEach((row: any, index: number) => {
+        try {
+          // Strip Aadhaar/biometrics before they enter list state or navigation params.
+          const rawDetail: DLDetailPayload | null = row.fullResponse?.result ?? row.fullResponse ?? null;
+          // One corrupt Sarathi payload must not blank the whole ledger.
+          const detail = rawDetail ? sanitizeDlPayload(rawDetail) : null;
+          const rawDlNo = (row.dlLicno ?? '—').trim();
+          mapped.push({
+            id: String(row.id ?? row.dlLicno ?? index),
+            recordId: Number(row.id) || index,
+            // RED-tier: only ADMIN keeps the full licence number on the list card.
+            dlNo: rawDlNo === '—'
+              ? rawDlNo
+              : redactRedPii(rawDlNo, user?.roleKey, maskDlNumber),
+            driverName: resolveDriverFullName(detail, row.driverName, row.bioFirstName),
+            transportUpto: row.dlTrValdtoDt || null,
+            nonTransportUpto: row.dlNtValdtoDt || null,
+            hazardousUpto: row.dlHzValdtoDt || null,
+            hillsUpto: row.dlHlValdtoDt || null,
+            status: row.dlStatus ?? '',
+            detail,
+          });
+        } catch {
+          mapped.push({
+            id: String(row?.id ?? row?.dlLicno ?? `bad-${index}`),
+            recordId: Number(row?.id) || index,
+            dlNo: String(row?.dlLicno ?? '—'),
+            driverName: String(row?.driverName ?? row?.bioFirstName ?? 'Unknown driver'),
+            transportUpto: row?.dlTrValdtoDt || null,
+            nonTransportUpto: row?.dlNtValdtoDt || null,
+            hazardousUpto: row?.dlHzValdtoDt || null,
+            hillsUpto: row?.dlHlValdtoDt || null,
+            status: row?.dlStatus ?? '',
+            detail: null,
+          });
+        }
       });
       setItems(mapped);
       setTotal(data.totalCount ?? mapped.length);
       setStatusCounts(data.statusCounts ?? null);
       setExpiryCounts(data.expiryCounts ?? null);
     } catch { /* empty state */ }
-    finally { setLoading(false); setRefreshing(false); }
+    finally {
+      if (seq === fetchSeqRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    }
   }, [canScopeByCustomerId, customerId, user?.roleKey]);
 
-  useEffect(() => {
-    fetchData(appliedFilters, expiryFilter);
-  }, [fetchData, appliedFilters, expiryFilter]);
+  // Focus (not only mount) — iOS stack transitions often finish after the first
+  // paint, so the initial fetch can bind to a zero-height list until Filters.
+  useFocusEffect(
+    useCallback(() => {
+      fetchData(appliedFilters, expiryFilter);
+    }, [fetchData, appliedFilters, expiryFilter]),
+  );
 
   const handleSearch = () => {
     setAppliedFilters({ ...draftFilters });
@@ -443,31 +481,36 @@ export default function DLListScreen() {
         />
       ) : null}
 
-      {loading && items.length === 0 ? (
-        <View style={{ padding: Spacing[4], gap: 8 }}>
-          {listHeader}
-          {[1, 2, 3, 4].map((i) => <SkeletonCard key={i} />)}
-        </View>
-      ) : (
-        <FlatList
-          data={items}
-          keyExtractor={(d) => d.id}
-          renderItem={renderItem}
-          ListHeaderComponent={listHeader}
-          contentContainerStyle={styles.list}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => fetchData(appliedFilters, expiryFilter, true)}
-              tintColor={Colors.blue}
-            />
-          }
-          ListEmptyComponent={
-            <EmptyState title="No licences found" icon="🪪" subtitle="No driving licences match this filter." />
-          }
-          showsVerticalScrollIndicator={false}
-        />
-      )}
+      <View style={styles.listWrap}>
+        {loading && items.length === 0 ? (
+          <View style={styles.skeletonWrap}>
+            {listHeader}
+            {[1, 2, 3, 4].map((i) => <SkeletonCard key={i} />)}
+          </View>
+        ) : (
+          <FlatList
+            style={styles.flex}
+            data={items}
+            keyExtractor={(d) => d.id}
+            renderItem={renderItem}
+            ListHeaderComponent={listHeader}
+            contentContainerStyle={[styles.list, items.length === 0 && styles.listEmpty]}
+            removeClippedSubviews={false}
+            initialNumToRender={Platform.OS === 'ios' ? 12 : 10}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={() => fetchData(appliedFilters, expiryFilter, true)}
+                tintColor={Colors.blue}
+              />
+            }
+            ListEmptyComponent={
+              <EmptyState title="No licences found" icon="🪪" subtitle="No driving licences match this filter." />
+            }
+            showsVerticalScrollIndicator={false}
+          />
+        )}
+      </View>
 
       <DLCheckStatusModal
         visible={showCheckStatus}
@@ -479,6 +522,10 @@ export default function DLListScreen() {
 }
 
 const styles = StyleSheet.create({
+  flex: { flex: 1 },
+  listWrap: { flex: 1, minHeight: 0 },
+  skeletonWrap: { flex: 1, padding: Spacing[4], gap: 8 },
+  listEmpty: { flexGrow: 1 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   addBtn: {
     backgroundColor: Colors.blue,

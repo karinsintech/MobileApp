@@ -48,6 +48,15 @@ export function ChevronRightIcon({size = 18, color = '#FFFFFF'}: IconProps) {
   );
 }
 
+/** Navigation back chevron — mirrors ChevronRight for stack headers. */
+export function ChevronLeftIcon({size = 18, color = '#FFFFFF'}: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="m15 18-6-6 6-6" {...strokeProps(color)} />
+    </Svg>
+  );
+}
+
 export function WarningIcon({size = 22, color = '#FFFFFF'}: IconProps) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">

@@ -2,11 +2,11 @@
  * Vehicle Toll Transactions Summary — web /transaction/vehicle-transaction-report parity.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, FlatList, StyleSheet, RefreshControl, TouchableOpacity,
+  View, Text, FlatList, StyleSheet, RefreshControl, TouchableOpacity, Platform,
 } from 'react-native';
-import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { reportApi, type VehicleTollSummaryRow } from '../../../services/api/reportApi';
 import { apiClient } from '../../../services/api/client';
 import { useAppSelector } from '../../../store';
@@ -26,6 +26,7 @@ import {
 } from '../components/ReportExportMenu';
 import { runReportExport, stripReportPagination } from '../utils/reportExportUtils';
 import {
+  DEFAULT_TOLL_REPORT_FILTERS,
   EMPTY_TOLL_REPORT_FILTERS,
   buildTollReportQueryParams,
   formatReportMonth,
@@ -38,7 +39,7 @@ import type { MoreStackParamList } from '../../../navigation/types';
 const PAGE_SIZE = 25;
 
 function filtersFromDateRange(dateRange?: TollReportDateRange): TollReportFilters {
-  if (!dateRange) return EMPTY_TOLL_REPORT_FILTERS;
+  if (!dateRange) return DEFAULT_TOLL_REPORT_FILTERS;
   return { ...EMPTY_TOLL_REPORT_FILTERS, dateRange };
 }
 
@@ -70,6 +71,7 @@ export default function VehicleTollSummaryScreen() {
   const [showFilters, setShowFilters] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null);
+  const fetchSeqRef = useRef(0);
 
   const showCustomerColumns = requiresAdminContextPicker(user?.roleKey);
   const showSummaryCards = user?.roleKey === 'ADMIN';
@@ -119,25 +121,34 @@ export default function VehicleTollSummaryScreen() {
   }, [user?.roleKey]);
 
   const fetchData = useCallback(async (filters: TollReportFilters, isRefresh = false) => {
+    const seq = ++fetchSeqRef.current;
     isRefresh ? setRefresh(true) : setLoading(true);
     try {
       const { data } = await reportApi.getVehicleTollSummary(
         buildTollReportQueryParams(filters, 1, PAGE_SIZE),
       );
+      if (seq !== fetchSeqRef.current) return;
       setRows(data.results ?? []);
       setTotal(data.total ?? 0);
       setCards(buildVehicleSummaryCards(data.cards));
     } catch {
+      if (seq !== fetchSeqRef.current) return;
       setRows([]);
       setTotal(0);
       setCards(buildVehicleSummaryCards());
     } finally {
-      setLoading(false);
-      setRefresh(false);
+      if (seq === fetchSeqRef.current) {
+        setLoading(false);
+        setRefresh(false);
+      }
     }
   }, []);
 
-  useEffect(() => { fetchData(appliedFilters); }, [fetchData, appliedFilters]);
+  useFocusEffect(
+    useCallback(() => {
+      fetchData(appliedFilters);
+    }, [fetchData, appliedFilters]),
+  );
 
   const handleSearch = () => {
     setAppliedFilters({ ...draftFilters });
@@ -145,8 +156,8 @@ export default function VehicleTollSummaryScreen() {
   };
 
   const handleReset = () => {
-    setDraftFilters(EMPTY_TOLL_REPORT_FILTERS);
-    setAppliedFilters(EMPTY_TOLL_REPORT_FILTERS);
+    setDraftFilters(DEFAULT_TOLL_REPORT_FILTERS);
+    setAppliedFilters(DEFAULT_TOLL_REPORT_FILTERS);
   };
 
   const handleSummaryCardPress = (dateRange: TollReportDateRange) => {
@@ -280,30 +291,39 @@ export default function VehicleTollSummaryScreen() {
         />
       ) : null}
 
-      {loading ? (
-        <View style={{ padding: Spacing[4], gap: 8 }}>
-          {[1, 2, 3, 4].map((i) => <SkeletonCard key={i} />)}
-        </View>
-      ) : (
-        <FlatList
-          data={rows}
-          keyExtractor={(row, index) => `${row.vehicleNo ?? 'row'}-${row.month ?? index}`}
-          renderItem={renderItem}
-          contentContainerStyle={styles.list}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={() => fetchData(appliedFilters, true)} tintColor={Colors.blue} />
-          }
-          ListEmptyComponent={
-            <EmptyState title="No records found" icon="📊" subtitle="No vehicle toll summary matches your filters." />
-          }
-          showsVerticalScrollIndicator={false}
-        />
-      )}
+      <View style={styles.listWrap}>
+        {loading && rows.length === 0 ? (
+          <View style={styles.skeletonWrap}>
+            {[1, 2, 3, 4].map((i) => <SkeletonCard key={i} />)}
+          </View>
+        ) : (
+          <FlatList
+            style={styles.flex}
+            data={rows}
+            keyExtractor={(row, index) => `${row.vehicleNo ?? 'row'}-${row.month ?? index}`}
+            renderItem={renderItem}
+            contentContainerStyle={[styles.list, rows.length === 0 && styles.listEmpty]}
+            removeClippedSubviews={false}
+            initialNumToRender={Platform.OS === 'ios' ? 12 : 10}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={() => fetchData(appliedFilters, true)} tintColor={Colors.blue} />
+            }
+            ListEmptyComponent={
+              <EmptyState title="No records found" icon="📊" subtitle="No vehicle toll summary matches your filters." />
+            }
+            showsVerticalScrollIndicator={false}
+          />
+        )}
+      </View>
     </LiquidBackground>
   );
 }
 
 const styles = StyleSheet.create({
+  flex: { flex: 1 },
+  listWrap: { flex: 1, minHeight: 0 },
+  skeletonWrap: { flex: 1, padding: Spacing[4], gap: 8 },
+  listEmpty: { flexGrow: 1 },
   list: { paddingHorizontal: Spacing[4], paddingTop: Spacing[2], gap: 8, paddingBottom: 32 },
   card: { padding: 13, gap: 8 },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },

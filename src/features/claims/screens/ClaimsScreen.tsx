@@ -5,7 +5,9 @@ import { claimsApi } from '../../../services/api/claimsApi';
 import { dashboardApi } from '../../../services/api/dashboardApi';
 import { vehicleApi } from '../../../services/api/vehicleApi';
 import { useAppSelector } from '../../../store';
-import { LiquidBackground, GlassCard, StatusPill, SkeletonCard, EmptyState, ScreenHeader } from '../../../components';
+import {
+  LiquidBackground, GlassCard, StatusPill, SkeletonCard, EmptyState, ScreenHeader, ScrollableChipBar,
+} from '../../../components';
 import { Colors, FontSize, Spacing, Radius } from '../../../theme';
 import { formatINR, fmtDate } from '../../../utils/format';
 import type { ClaimsStackParamList } from '../../../navigation/types';
@@ -254,9 +256,9 @@ export default function ClaimsScreen() {
       ) : null}
 
       <View style={styles.filterRow}>
-        <FlatList
-          horizontal data={[...CLAIM_FILTER_OPTS]} keyExtractor={(f) => f}
-          showsHorizontalScrollIndicator={false}
+        <ScrollableChipBar
+          data={[...CLAIM_FILTER_OPTS]}
+          keyExtractor={(f) => f}
           contentContainerStyle={styles.filterListContent}
           renderItem={({ item }) => {
             const count = filterCounts[item];
@@ -325,22 +327,24 @@ const styles = StyleSheet.create({
   filterBtnActive: { backgroundColor: Colors.infoBg, borderColor: Colors.infoBorder },
   filterBtnText: { fontSize: FontSize.sm, fontWeight: '700', color: Colors.text.secondary },
   filterBtnTextActive: { color: Colors.infoLight },
-  filterRow:  { marginBottom: 4, overflow: 'visible' },
+  filterRow: {
+    marginBottom: 4,
+    marginHorizontal: Spacing[4],
+    overflow: 'visible',
+  },
   filterListContent: {
     gap: 10,
-    paddingHorizontal: Spacing[4],
-    paddingTop: 10,
+    paddingTop: 6,
     paddingBottom: 6,
-    paddingRight: Spacing[2],
   },
   chip:       {
     position: 'relative',
     paddingHorizontal: 14,
     paddingVertical: 8,
     paddingRight: 16,
-    backgroundColor: Colors.glass.bg,
+    backgroundColor: Colors.glass.bgMedium,
     borderWidth: 1,
-    borderColor: Colors.glass.border,
+    borderColor: Colors.glass.borderStrong,
     borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center',

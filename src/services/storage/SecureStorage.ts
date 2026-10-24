@@ -47,6 +47,14 @@ const LAST_LOGIN_MOBILE_KEY = 'last_login_mobile';
 // Never fall back to MMKV for the JWT — a failed Keychain write must surface as error.
 const TOKEN_ACCESSIBLE = Keychain.ACCESSIBLE.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY;
 
+/**
+ * Process-local JWT cache — Keychain is authoritative for persistence, but every
+ * axios interceptor used to call SecItemCopyMatching. On iOS that is both slow
+ * (menu jank) and occasionally returns empty right after a write, which made
+ * refresh fail and bounced users from dashboard back to login.
+ */
+let memoryAccessToken: string | null = null;
+
 function cache() {
   return getCacheStore();
 }
@@ -83,6 +91,8 @@ export const SecureStorage = {
   // ── Access Token ─────────────────────────────────────────────────────────
   async setAccessToken(token: string): Promise<void> {
     try {
+      // Publish to memory first so in-flight API calls never race an empty Keychain read.
+      memoryAccessToken = token;
       await Keychain.setGenericPassword(
         KEYCHAIN_KEYS.accessToken,
         token,
@@ -94,11 +104,15 @@ export const SecureStorage = {
       );
       return;
     } catch {
+      memoryAccessToken = null;
       throw new Error('Could not save access token on this device.');
     }
   },
 
   async getAccessToken(): Promise<string | null> {
+    // Hot path for every authenticated request — skip Keychain when we already have it.
+    if (memoryAccessToken) return memoryAccessToken;
+
     try {
       const creds = await Keychain.getGenericPassword({
         service: KEYCHAIN_SERVICE,
@@ -109,16 +123,20 @@ export const SecureStorage = {
         creds &&
         creds.username === KEYCHAIN_KEYS.accessToken
       ) {
+        memoryAccessToken = creds.password;
         return creds.password;
       }
 
       return null;
     } catch {
-      return null;
+      // Prefer the in-memory JWT over a transient SecItem failure so a blip
+      // does not strip Authorization and force a false logout.
+      return memoryAccessToken;
     }
   },
 
   async removeAccessToken(): Promise<void> {
+    memoryAccessToken = null;
     try {
       await Keychain.resetGenericPassword({ service: KEYCHAIN_SERVICE });
     } catch {

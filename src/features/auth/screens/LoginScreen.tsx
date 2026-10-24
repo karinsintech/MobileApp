@@ -155,7 +155,17 @@ export default function LoginScreen({ navigation }: Props) {
                 returnKeyType="next"
                 maxLength={10}
                 value={mobileNo}
-                onChangeText={(t) => { setMobileNo(t); dispatch(clearError()); }}
+                blurOnSubmit={false}
+                onChangeText={(t) => {
+                  // Digits only — when the 10th digit lands, jump to password so
+                  // the user never has to tap the next field on phone-pad keyboards.
+                  const digits = t.replace(/\D/g, '').slice(0, 10);
+                  setMobileNo(digits);
+                  dispatch(clearError());
+                  if (digits.length === 10) {
+                    passwordRef.current?.focus();
+                  }
+                }}
                 onSubmitEditing={() => passwordRef.current?.focus()}
               />
             </View>

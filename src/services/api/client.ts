@@ -35,7 +35,9 @@ let refreshQueue: Array<{
 // the HTTP-only refresh cookie resurrects a cleared Keychain session.
 let sessionInvalidated = true;
 let sessionActivatedAt = 0;
-const SESSION_LOGOUT_GRACE_MS = 20_000;
+// Cover post-login splash + first dashboard/menu fetches. A shorter window used
+// to force-logout when iOS Keychain/refresh raced right after sign-in.
+const SESSION_LOGOUT_GRACE_MS = 60_000;
 
 export function invalidateApiSession(): void {
   sessionInvalidated = true;

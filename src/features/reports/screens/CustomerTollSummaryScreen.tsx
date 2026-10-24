@@ -2,10 +2,11 @@
  * Customer Toll Transactions Summary — web /transaction/customer-transaction-report parity.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, FlatList, StyleSheet, RefreshControl,
+  View, Text, FlatList, StyleSheet, RefreshControl, Platform,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { reportApi, type CustomerBalanceSummary, type CustomerTollSummaryRow } from '../../../services/api/reportApi';
 import { apiClient } from '../../../services/api/client';
 import { useAppSelector } from '../../../store';
@@ -25,7 +26,7 @@ import {
 } from '../components/ReportExportMenu';
 import { runReportExport, stripReportPagination } from '../utils/reportExportUtils';
 import {
-  EMPTY_TOLL_REPORT_FILTERS,
+  DEFAULT_TOLL_REPORT_FILTERS,
   buildTollReportQueryParams,
   formatReportMonth,
   hasActiveTollReportFilters,
@@ -62,8 +63,8 @@ function BalanceSummaryCard({ summary }: { summary: CustomerBalanceSummary }) {
 export default function CustomerTollSummaryScreen() {
   const { user } = useAppSelector((s) => s.auth);
 
-  const [draftFilters, setDraftFilters] = useState<TollReportFilters>(EMPTY_TOLL_REPORT_FILTERS);
-  const [appliedFilters, setAppliedFilters] = useState<TollReportFilters>(EMPTY_TOLL_REPORT_FILTERS);
+  const [draftFilters, setDraftFilters] = useState<TollReportFilters>(DEFAULT_TOLL_REPORT_FILTERS);
+  const [appliedFilters, setAppliedFilters] = useState<TollReportFilters>(DEFAULT_TOLL_REPORT_FILTERS);
   const [customers, setCustomers] = useState<Array<{ yapEntityId: string; firstName: string }>>([]);
   const [agents, setAgents] = useState<Array<{ id: number; agentName: string }>>([]);
   const [rows, setRows] = useState<CustomerTollSummaryRow[]>([]);
@@ -75,6 +76,7 @@ export default function CustomerTollSummaryScreen() {
   const [showFilters, setShowFilters] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [exporting, setExporting] = useState<'excel' | 'pdf' | null>(null);
+  const fetchSeqRef = useRef(0);
 
   const showCustomerColumns = requiresAdminContextPicker(user?.roleKey);
   const showSummaryCards = user?.roleKey === 'ADMIN' || user?.roleKey === 'AGENT';
@@ -105,27 +107,36 @@ export default function CustomerTollSummaryScreen() {
   }, [user?.roleKey]);
 
   const fetchData = useCallback(async (filters: TollReportFilters, isRefresh = false) => {
+    const seq = ++fetchSeqRef.current;
     isRefresh ? setRefresh(true) : setLoading(true);
     try {
       const { data } = await reportApi.getCustomerTollSummary(
         buildTollReportQueryParams(filters, 1, PAGE_SIZE),
       );
+      if (seq !== fetchSeqRef.current) return;
       setRows(data.result ?? []);
       setTotal(data.count ?? 0);
       setBalanceSummary(data.balanceSummary ?? null);
       setCards(buildCustomerSummaryCards(data.cards));
     } catch {
+      if (seq !== fetchSeqRef.current) return;
       setRows([]);
       setTotal(0);
       setBalanceSummary(null);
       setCards(buildCustomerSummaryCards());
     } finally {
-      setLoading(false);
-      setRefresh(false);
+      if (seq === fetchSeqRef.current) {
+        setLoading(false);
+        setRefresh(false);
+      }
     }
   }, []);
 
-  useEffect(() => { fetchData(appliedFilters); }, [fetchData, appliedFilters]);
+  useFocusEffect(
+    useCallback(() => {
+      fetchData(appliedFilters);
+    }, [fetchData, appliedFilters]),
+  );
 
   const handleSearch = () => {
     setAppliedFilters({ ...draftFilters });
@@ -133,8 +144,8 @@ export default function CustomerTollSummaryScreen() {
   };
 
   const handleReset = () => {
-    setDraftFilters(EMPTY_TOLL_REPORT_FILTERS);
-    setAppliedFilters(EMPTY_TOLL_REPORT_FILTERS);
+    setDraftFilters(DEFAULT_TOLL_REPORT_FILTERS);
+    setAppliedFilters(DEFAULT_TOLL_REPORT_FILTERS);
   };
 
   const handleSummaryCardPress = (dateRange: TollReportDateRange) => {
@@ -256,30 +267,39 @@ export default function CustomerTollSummaryScreen() {
         </View>
       ) : null}
 
-      {loading ? (
-        <View style={{ padding: Spacing[4], gap: 8 }}>
-          {[1, 2, 3, 4].map((i) => <SkeletonCard key={i} />)}
-        </View>
-      ) : (
-        <FlatList
-          data={rows}
-          keyExtractor={(row, index) => `${row.customerId ?? 'row'}-${row.month ?? index}`}
-          renderItem={renderItem}
-          contentContainerStyle={styles.list}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={() => fetchData(appliedFilters, true)} tintColor={Colors.blue} />
-          }
-          ListEmptyComponent={
-            <EmptyState title="No records found" icon="📊" subtitle="No customer toll summary matches your filters." />
-          }
-          showsVerticalScrollIndicator={false}
-        />
-      )}
+      <View style={styles.listWrap}>
+        {loading && rows.length === 0 ? (
+          <View style={styles.skeletonWrap}>
+            {[1, 2, 3, 4].map((i) => <SkeletonCard key={i} />)}
+          </View>
+        ) : (
+          <FlatList
+            style={styles.flex}
+            data={rows}
+            keyExtractor={(row, index) => `${row.customerId ?? 'row'}-${row.month ?? index}`}
+            renderItem={renderItem}
+            contentContainerStyle={[styles.list, rows.length === 0 && styles.listEmpty]}
+            removeClippedSubviews={false}
+            initialNumToRender={Platform.OS === 'ios' ? 12 : 10}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={() => fetchData(appliedFilters, true)} tintColor={Colors.blue} />
+            }
+            ListEmptyComponent={
+              <EmptyState title="No records found" icon="📊" subtitle="No customer toll summary matches your filters." />
+            }
+            showsVerticalScrollIndicator={false}
+          />
+        )}
+      </View>
     </LiquidBackground>
   );
 }
 
 const styles = StyleSheet.create({
+  flex: { flex: 1 },
+  listWrap: { flex: 1, minHeight: 0 },
+  skeletonWrap: { flex: 1, padding: Spacing[4], gap: 8 },
+  listEmpty: { flexGrow: 1 },
   list: { paddingHorizontal: Spacing[4], paddingTop: Spacing[2], gap: 8, paddingBottom: 32 },
   card: { padding: 13, gap: 8 },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 },

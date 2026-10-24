@@ -3,24 +3,29 @@ import {Platform} from 'react-native';
 /**
  * Typography tokens.
  *
- * Audiowide is the Karins wordmark/logo face. Inter and Manrope are the UI
- * families. System aliases keep the app readable when native font assets are absent.
+ * Audiowide is the only custom face shipped in Info.plist / Android assets.
+ * Inter, Manrope, and JetBrainsMono are not bundled — on iOS a missing
+ * fontFamily can paint blank glyphs and stutter layout, so we map those
+ * slots to the system UI face. Android keeps the named families (falls back
+ * cleanly when the TTF is absent from assets).
  */
 const systemRegular = Platform.select({ios: 'System', android: 'sans-serif'}) ?? 'System';
 const systemMedium = Platform.select({ios: 'System', android: 'sans-serif-medium'}) ?? 'System';
+const systemBold = Platform.select({ios: 'System', android: 'sans-serif'}) ?? 'System';
+const systemMono = Platform.select({ios: 'Menlo', android: 'monospace'}) ?? 'monospace';
 
 export const FontFamily = {
   logo: 'Audiowide-Regular',
-  displayRegular: 'Manrope-Regular',
-  displaySemibold: 'Manrope-SemiBold',
-  displayBold: 'Manrope-Bold',
-  regular: 'Inter-Regular',
-  medium: 'Inter-Medium',
-  semibold: 'Inter-SemiBold',
-  bold: 'Inter-Bold',
-  extraBold: 'Inter-ExtraBold',
-  mono: 'JetBrainsMono-Regular',
-  monoMedium: 'JetBrainsMono-Medium',
+  displayRegular: Platform.OS === 'ios' ? systemRegular : 'Manrope-Regular',
+  displaySemibold: Platform.OS === 'ios' ? systemMedium : 'Manrope-SemiBold',
+  displayBold: Platform.OS === 'ios' ? systemBold : 'Manrope-Bold',
+  regular: Platform.OS === 'ios' ? systemRegular : 'Inter-Regular',
+  medium: Platform.OS === 'ios' ? systemMedium : 'Inter-Medium',
+  semibold: Platform.OS === 'ios' ? systemMedium : 'Inter-SemiBold',
+  bold: Platform.OS === 'ios' ? systemBold : 'Inter-Bold',
+  extraBold: Platform.OS === 'ios' ? systemBold : 'Inter-ExtraBold',
+  mono: Platform.OS === 'ios' ? systemMono : 'JetBrainsMono-Regular',
+  monoMedium: Platform.OS === 'ios' ? systemMono : 'JetBrainsMono-Medium',
   system: systemRegular,
   systemMedium,
 } as const;
