@@ -53,6 +53,9 @@ export interface ChallanPaymentResponse {
 }
 
 export interface ChallanPayNowResponse {
+  // Finii returns paymentLink; older Razorpay HTML used paymentUrl.
+  paymentLink?: string;
+  payment_link?: string;
   paymentUrl?: string;
   payment_url?: string;
   url?: string;
@@ -64,6 +67,17 @@ export interface ChallanPayNowResponse {
   amountDetail?: {
     details?: Array<{ status?: string }>;
   };
+}
+
+/** Webhook-backed session status after Finii redirects back with requestId. */
+export interface ChallanPaymentStatusResponse {
+  requestId?: string;
+  challanNumber?: string;
+  transactionStatus?: string | null;
+  ioStatus?: string | null;
+  isSettled?: boolean;
+  amountSettledAt?: string | null;
+  paymentResult?: 'success' | 'failed' | 'cancelled' | 'initiated' | 'pending' | string;
 }
 
 export const challanApi = {
@@ -90,9 +104,13 @@ export const challanApi = {
   getPaymentReceipt: (payload: { challanNumber: string; requestId: string }) =>
     apiClient.post<{ url?: string; message?: string }>('/echallan/payment-receipt', payload),
 
-  // Starts gateway checkout — returns HTML payment page and session requestId.
+  // Starts Finii checkout — returns paymentLink + requestId (webhook settles later).
   payNow: (payload: { challanNo: string[]; vehicleNo: string }) =>
     apiClient.post<ChallanPayNowResponse>('/echallan/paynow', payload),
+
+  // Web parity — after Finii returnUrl, read webhook-backed status for this session.
+  getPaymentStatus: (payload: { requestId: string; challanNumber: string }) =>
+    apiClient.post<ChallanPaymentStatusResponse>('/echallan/payment-status', payload),
 
   // Releases a stale or user-cancelled checkout session on the server.
   cancelPayment: (payload: { requestId: string; challanNumber: string }) =>

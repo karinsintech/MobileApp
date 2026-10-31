@@ -40,19 +40,30 @@ function isOnCooldown(id: string, body: string): boolean {
   return Date.now() - new Date(entry.at).getTime() < DERIVED_PUSH_COOLDOWN_MS;
 }
 
-/** Display a dashboard-derived alert in the system tray when its category toggle is on. */
+/**
+ * OS tray for fleet alerts — notify once while the unread row stays in the shade.
+ * Same id + body already shown recently → skip (no re-buzz).
+ * Body changed while still unread → silent tray update (onlyAlertOnce).
+ */
 export async function showDerivedFleetPush(notification: FleetNotification): Promise<void> {
+  if (notification.read) {
+    await pushService.cancelTrayNotification(notification.id);
+    return;
+  }
   if (!isCategoryAlertsEnabled(notification.category)) return;
 
-  // Same alert already shown recently — do not rewrite the tray row.
-  // (onlyAlertOnce still updates the shade on many OEMs and looks like spam.)
+  // Unread already sitting in the tray with the same copy — do not notify again.
   if (isOnCooldown(notification.id, notification.body)) return;
+
+  const prior = loadCooldowns()[notification.id];
+  // Content changed while still unread — refresh the shade row silently.
+  const onlyAlertOnce = Boolean(prior);
 
   // Claim cooldown before await so parallel dashboard/badge refreshes cannot double-post.
   saveCooldown(notification.id, notification.body);
 
   await pushService.displayLocalNotification(notification, {
-    onlyAlertOnce: false,
+    onlyAlertOnce,
   });
 }
 

@@ -9,8 +9,13 @@ export async function displayFleetTrayNotification(_args: {
   body: string;
   channelId: string;
   data?: Record<string, string> | null;
+  onlyAlertOnce?: boolean;
 }): Promise<boolean> {
   return false;
+}
+
+export async function cancelFleetTrayNotification(_id: string): Promise<void> {
+  /* no-op on iOS */
 }
 
 export async function consumeFleetTrayOpenIntent(): Promise<boolean> {

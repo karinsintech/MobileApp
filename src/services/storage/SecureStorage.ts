@@ -4,8 +4,10 @@
  * The bearer token is stored exclusively in Keychain.
  * MMKV is never used as an authentication-token fallback.
  *
- * PIN quick-login retains only a bcrypt hash + masked hint across logout
- * (MASVS-STORAGE-1 / MM-07) — never the plaintext mobile or last_login_mobile.
+ * PIN quick-login retains a bcrypt hash + masked hint across logout
+ * (MASVS-STORAGE-1 / MM-07). When PIN login stays enabled, last_login_mobile is
+ * also restored so the Login PIN popup can call /auth/pin/signIn without a
+ * mobile field. Forget This Device wipes all of it.
  */
 
 import * as Keychain from 'react-native-keychain';
@@ -22,6 +24,12 @@ import { maskMobileNumber } from '../../utils/maskMobileNumber';
 export { maskMobileNumber };
 
 const CAN_RESTORE_SESSION_KEY = 'can_restore_session';
+/**
+ * Soft-lock for biometric quick-login — JWT stays in Keychain but must not be
+ * attached to API calls until Fingerprint / Face ID unlocks (Login screen).
+ */
+const BIOMETRIC_SESSION_LOCKED_KEY = 'biometric_session_locked';
+const BIOMETRIC_LOGIN_ENABLED_KEY = 'biometric_login_enabled';
 /** @deprecated Legacy plaintext — migrated to hash+hint then deleted. */
 const PIN_LOGIN_MOBILE_KEY = 'pin_login_mobile_number';
 const PIN_LOGIN_MOBILE_HASH_KEY = 'pin_login_mobile_hash';
@@ -40,7 +48,8 @@ const KEYCHAIN_KEYS = {
 const SESSION_USER_KEY = 'session_user';
 const DASHBOARD_CONTEXT_KEY = 'dashboard_context';
 
-// Session-scoped only — cleared on logout and never restored (MM-07).
+// Restored across normal logout only when PIN login stays enabled (PIN popup).
+// Always wiped on Forget This Device (MM-07).
 const LAST_LOGIN_MOBILE_KEY = 'last_login_mobile';
 
 // After first unlock: backgroundFleetSync still works after reboot; no iCloud copy.
@@ -54,6 +63,12 @@ const TOKEN_ACCESSIBLE = Keychain.ACCESSIBLE.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY
  * refresh fail and bounced users from dashboard back to login.
  */
 let memoryAccessToken: string | null = null;
+/**
+ * bcrypt.compareSync(~10 rounds) freezes the JS thread for 100–300ms+.
+ * Cache the last successful verify for this process so PIN open / submit
+ * do not re-run compareSync on every tap and 4th digit.
+ */
+let verifiedPinLoginMobileMemory: string | null = null;
 
 function cache() {
   return getCacheStore();
@@ -110,6 +125,11 @@ export const SecureStorage = {
   },
 
   async getAccessToken(): Promise<string | null> {
+    // Soft-locked for biometric Login — hide JWT from axios until Fingerprint unlocks.
+    if (SecureStorage.isBiometricSessionLocked()) {
+      return null;
+    }
+
     // Hot path for every authenticated request — skip Keychain when we already have it.
     if (memoryAccessToken) return memoryAccessToken;
 
@@ -133,6 +153,44 @@ export const SecureStorage = {
       // does not strip Authorization and force a false logout.
       return memoryAccessToken;
     }
+  },
+
+  /**
+   * Reads the Keychain JWT even while biometric soft-lock is on.
+   * Only for readiness checks / unlock restore — never for API Authorization.
+   */
+  async peekAccessTokenIgnoringBiometricLock(): Promise<string | null> {
+    if (memoryAccessToken) return memoryAccessToken;
+    try {
+      const creds = await Keychain.getGenericPassword({
+        service: KEYCHAIN_SERVICE,
+        authenticationPrompt: { title: 'Karins Fleet', cancel: 'Cancel' },
+      });
+      if (creds && creds.username === KEYCHAIN_KEYS.accessToken) {
+        return creds.password;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  },
+
+  /** Drops the process JWT cache without wiping Keychain (biometric soft lock). */
+  clearMemoryAccessToken(): void {
+    memoryAccessToken = null;
+  },
+
+  setBiometricSessionLocked(locked: boolean): void {
+    try {
+      authMeta().set(BIOMETRIC_SESSION_LOCKED_KEY, locked);
+    } catch {
+      // ignore — lock flag is best-effort alongside Keychain
+    }
+  },
+
+  isBiometricSessionLocked(): boolean {
+    if (!isEncryptedMmkvReady()) return false;
+    return authMeta().getBoolean(BIOMETRIC_SESSION_LOCKED_KEY) ?? false;
   },
 
   async removeAccessToken(): Promise<void> {
@@ -164,9 +222,11 @@ export const SecureStorage = {
    */
   setPinLoginMobile(mobile: string): void {
     if (mobile.length !== 10) return;
+    // hashSync is intentionally rare (enable / bind) — not on the Login open path.
     cache().set(PIN_LOGIN_MOBILE_HASH_KEY, bcrypt.hashSync(mobile, PIN_MOBILE_BCRYPT_ROUNDS));
     cache().set(PIN_LOGIN_MOBILE_HINT_KEY, maskMobileNumber(mobile));
     cache().delete(PIN_LOGIN_MOBILE_KEY);
+    verifiedPinLoginMobileMemory = mobile;
   },
 
   /** @deprecated Prefer getPinLoginMobileHint / verifyPinLoginMobile — always null. */
@@ -189,16 +249,25 @@ export const SecureStorage = {
   /** Confirms the typed number matches the device-bound PIN account without storing it. */
   verifyPinLoginMobile(mobile: string): boolean {
     migrateLegacyPinMobileIfNeeded();
+    if (!mobile || mobile.length !== 10) return false;
+    // Same number already verified this process — skip another sync bcrypt.
+    if (verifiedPinLoginMobileMemory === mobile) return true;
+
     const hash = cache().getString(PIN_LOGIN_MOBILE_HASH_KEY);
-    if (!hash || mobile.length !== 10) return false;
+    if (!hash) return false;
     try {
-      return bcrypt.compareSync(mobile, hash);
+      const matched = bcrypt.compareSync(mobile, hash);
+      if (matched) {
+        verifiedPinLoginMobileMemory = mobile;
+      }
+      return matched;
     } catch {
       return false;
     }
   },
 
   clearPinLoginMobile(): void {
+    verifiedPinLoginMobileMemory = null;
     cache().delete(PIN_LOGIN_MOBILE_KEY);
     cache().delete(PIN_LOGIN_MOBILE_HASH_KEY);
     cache().delete(PIN_LOGIN_MOBILE_HINT_KEY);
@@ -297,6 +366,11 @@ export const SecureStorage = {
       // ignore
     }
     try {
+      SecureStorage.setBiometricSessionLocked(false);
+    } catch {
+      // ignore
+    }
+    try {
       await clearHttpCookies();
     } catch {
       // ignore
@@ -334,12 +408,14 @@ export const SecureStorage = {
     const pinHint = pinLoginEnabled
       ? cache().getString(PIN_LOGIN_MOBILE_HINT_KEY)
       : null;
-    // App lock PIN is device-local and independent of account PIN — keep across
-    // normal logout; wipe only on Forget this device.
-    const APP_LOCK_PIN_HASH_KEY = 'app_lock_pin_hash';
-    const appLockPinHash = !forgetDevice
-      ? cache().getString(APP_LOCK_PIN_HASH_KEY)
+    // PIN-only Login popup needs the full number for /auth/pin/signIn — keep it
+    // when the user opted into PIN login; Forget This Device still wipes it.
+    const pinLoginMobile = pinLoginEnabled
+      ? cache().getString(LAST_LOGIN_MOBILE_KEY)
       : null;
+    // Biometric quick-login preference — keep across normal logout; wipe on Forget.
+    const biometricLoginEnabled =
+      !forgetDevice && cache().getString(BIOMETRIC_LOGIN_ENABLED_KEY) === '1';
     // Keep last GPS across normal logout so forgot-password / next export can
     // still stamp Login Session Location (wiped only on Forget this device).
     // Key must match LAST_GEO_MMKV_KEY in getClientGeoCoords (avoid circular import).
@@ -354,6 +430,31 @@ export const SecureStorage = {
       restoreAccessMenusCache,
     } = await import('./accessMenusCache');
     const accessMenusSnapshot = !forgetDevice ? snapshotAccessMenusCache() : [];
+    // Keep dismissed DL/Vahan/Claim/Challan ids so re-login does not
+    // resurrect the same daily ops alerts as unread.
+    let derivedAlertReadSnapshot: Record<string, string> = {};
+    let broadcastPushSnapshot: { ids: string[]; seeded: boolean } = {
+      ids: [],
+      seeded: false,
+    };
+    if (!forgetDevice) {
+      try {
+        const {
+          snapshotDerivedAlertReadState,
+        } = await import('../notifications/notificationCenter');
+        derivedAlertReadSnapshot = snapshotDerivedAlertReadState();
+      } catch {
+        derivedAlertReadSnapshot = {};
+      }
+      try {
+        const {
+          snapshotBroadcastPushDedupe,
+        } = await import('../notifications/broadcastPushDedupe');
+        broadcastPushSnapshot = snapshotBroadcastPushDedupe();
+      } catch {
+        broadcastPushSnapshot = { ids: [], seeded: false };
+      }
+    }
 
     await SecureStorage.clearSession();
     await SecureStorage.clearDeviceId();
@@ -368,21 +469,43 @@ export const SecureStorage = {
       // ignore
     }
 
-    // Never restore last_login_mobile or plaintext pin mobile.
-    // PIN quick-login may keep only the salted hash + masked hint.
+    // Restore PIN quick-login identity (+ mobile for the PIN-only popup).
     if (pinLoginEnabled && pinHash && pinHint) {
       SecureStorage.setPinLoginEnabled(true);
       cache().set(PIN_LOGIN_MOBILE_HASH_KEY, pinHash);
       cache().set(PIN_LOGIN_MOBILE_HINT_KEY, pinHint);
+      if (pinLoginMobile && pinLoginMobile.length === 10) {
+        cache().set(LAST_LOGIN_MOBILE_KEY, pinLoginMobile);
+      }
     }
-    if (appLockPinHash) {
-      cache().set(APP_LOCK_PIN_HASH_KEY, appLockPinHash);
+    if (biometricLoginEnabled) {
+      cache().set(BIOMETRIC_LOGIN_ENABLED_KEY, '1');
     }
     if (lastAuditGeoJson) {
       cache().set(LAST_GEO_KEY, lastAuditGeoJson);
     }
     if (accessMenusSnapshot.length) {
       restoreAccessMenusCache(accessMenusSnapshot);
+    }
+    if (Object.keys(derivedAlertReadSnapshot).length > 0) {
+      try {
+        const {
+          restoreDerivedAlertReadState,
+        } = await import('../notifications/notificationCenter');
+        restoreDerivedAlertReadState(derivedAlertReadSnapshot);
+      } catch {
+        // Dismiss-state restore must not block logout.
+      }
+    }
+    if (broadcastPushSnapshot.ids.length > 0 || broadcastPushSnapshot.seeded) {
+      try {
+        const {
+          restoreBroadcastPushDedupe,
+        } = await import('../notifications/broadcastPushDedupe');
+        restoreBroadcastPushDedupe(broadcastPushSnapshot);
+      } catch {
+        // Cron dedupe restore must not block logout.
+      }
     }
 
     try {

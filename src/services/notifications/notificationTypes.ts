@@ -9,8 +9,9 @@ export interface FleetNotification {
   /** Short one-liner for the in-app inbox list. */
   body: string;
   /**
-   * Optional full message used by the system tray (flattened to one line so
-   * Android shows everything without expand/collapse). Falls back to `body`.
+   * Optional full message used by the system tray.
+   * Android keeps newlines in the custom layout; iOS flattens to a wrapping line.
+   * Falls back to `body` when omitted.
    */
   detail?: string;
   /**

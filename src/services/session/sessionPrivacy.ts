@@ -1,21 +1,21 @@
 /**
- * Session privacy — idle lock + biometry/PIN re-entry (MM-01 / MASVS-AUTH-1).
+ * Session privacy — idle timer + biometric challenge helpers (MM-01 / MASVS-AUTH-1).
  *
- * Unlock is driven only by SESSION_IDLE_TIMEOUT_MS after the user is already
- * signed in. Sign-in / open / restore must never prompt fingerprint.
+ * After SESSION_IDLE_TIMEOUT_MS away, SessionPrivacyGate soft-logs the user out
+ * to the Login screen (password / account PIN / Fingerprint). This module only
+ * tracks left-at timestamps and runs the OS biometric challenge used by Login.
  *
  * Opaque overlay on AppState "inactive" still covers the iOS app-switcher
- * snapshot; that cover dismisses on resume unless the idle window elapsed.
+ * snapshot; that cover dismisses on resume unless idle logout already ran.
  *
- * Biometry ACL is biometry-only (no device passcode fallback) so idle unlock
- * never offers the phone lock password — alternatives are app-lock PIN only.
+ * Biometry ACL is biometry-only (no device passcode fallback).
  */
 
 import { Platform } from 'react-native';
 import * as Keychain from 'react-native-keychain';
 import { Cache } from '../storage/SecureStorage';
 
-/** Away this long before interactive unlock is required (fingerprint or PIN). */
+/** Away this long before the session soft-logs out to the Login screen. */
 export const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 /** Persisted so cold start still respects idle (in-memory refs alone are not enough). */
@@ -84,8 +84,8 @@ export async function clearSessionUnlockGate(): Promise<void> {
 }
 
 /**
- * Prompts biometrics after idle lock (auto or via App lock).
- * Never called from sign-in, restore, or app open.
+ * Prompts OS biometrics for Login Fingerprint / Face Lock.
+ * Never auto-called on cold open — only from an explicit Login tap (or helpers).
  */
 export async function authenticateSessionUnlock(): Promise<{
   ok: boolean;

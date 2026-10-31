@@ -15,6 +15,7 @@ export async function displayFleetTrayNotification(args: {
   body: string;
   channelId: string;
   data?: Record<string, string> | null;
+  onlyAlertOnce?: boolean;
 }): Promise<boolean> {
   if (typeof NativeFleetTrayNotification?.display !== 'function') {
     return false;
@@ -26,10 +27,21 @@ export async function displayFleetTrayNotification(args: {
       args.body,
       args.channelId,
       args.data ?? null,
+      args.onlyAlertOnce ?? false,
     );
     return true;
   } catch {
     return false;
+  }
+}
+
+/** Remove a shade row posted by the native module (Notifee cancel alone misses these). */
+export async function cancelFleetTrayNotification(id: string): Promise<void> {
+  if (!id || typeof NativeFleetTrayNotification?.cancel !== 'function') return;
+  try {
+    await NativeFleetTrayNotification.cancel(id);
+  } catch {
+    /* best-effort */
   }
 }
 

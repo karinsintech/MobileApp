@@ -34,11 +34,11 @@ const LEGENDS: {
   key: ClaimsCardFilterKey;
   label: string;
   color: string;
-  /** Claims list chip — pending has no dedicated chip, so View-all (ALL) is used. */
+  /** Claims list chip selected when this legend row is tapped. */
   claimFilter: ClaimFilter;
 }[] = [
   { key: 'approved', label: 'Approved', color: Colors.success, claimFilter: 'APPROVED' },
-  { key: 'pending', label: 'Pending', color: Colors.blue, claimFilter: 'ALL' },
+  { key: 'pending', label: 'Pending', color: Colors.blue, claimFilter: 'PENDING' },
   { key: 'waitingForDoc', label: 'Waiting Docs', color: Colors.warning, claimFilter: 'WAITING_FOR_DOC' },
   { key: 'rejected', label: 'Rejected', color: Colors.danger, claimFilter: 'REJECTED' },
   { key: 'expired', label: 'Expired', color: Colors.text.subtle, claimFilter: 'EXPIRED' },

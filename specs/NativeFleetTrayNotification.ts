@@ -13,6 +13,7 @@ export interface Spec extends TurboModule {
     body: string,
     channelId: string,
     data: { [key: string]: string } | null,
+    onlyAlertOnce: boolean,
   ): Promise<boolean>;
   cancel(id: string): Promise<boolean>;
   consumeOpenNotificationsIntent(): Promise<boolean>;

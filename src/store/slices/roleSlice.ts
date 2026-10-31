@@ -14,7 +14,14 @@ import {
   readAccessMenusCache,
   writeAccessMenusCache,
 } from '../../services/storage/accessMenusCache';
-import { signIn, signInWithPin, signOut, restoreSession } from './authSlice';
+import {
+  signIn,
+  signInWithPin,
+  signInWithBiometric,
+  signOut,
+  signOutIdle,
+  restoreSession,
+} from './authSlice';
 
 interface RoleState {
   accessMenus: AccessMenuItem[];
@@ -98,8 +105,11 @@ const roleSlice = createSlice({
       // Device cache is keyed by user/role and survives logout (see accessMenusCache).
       .addCase(signIn.pending, () => initialState)
       .addCase(signInWithPin.pending, () => initialState)
+      .addCase(signInWithBiometric.pending, () => initialState)
       .addCase(signOut.fulfilled, () => initialState)
       .addCase(signOut.rejected, () => initialState)
+      .addCase(signOutIdle.fulfilled, () => initialState)
+      .addCase(signOutIdle.rejected, () => initialState)
       .addCase(restoreSession.fulfilled, (state, action) => {
         if (!action.payload) {
           return initialState;

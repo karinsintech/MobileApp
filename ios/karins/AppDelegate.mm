@@ -3,6 +3,8 @@
  * Wires Firebase (FCM) + notification center so JS push/Notifee can run.
  * Shows an opaque privacy window on resign-active so app-switcher snapshots
  * never capture authenticated UI (MM-01 / MASVS-PLATFORM-3).
+ * Blanks screenshots / screen recordings via a secure UITextField layer
+ * (same outcome as Android FLAG_SECURE — Apple provides no public block API).
  */
 #import "AppDelegate.h"
 
@@ -31,7 +33,21 @@
   UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
   center.delegate = self;
 
-  return [super application:application didFinishLaunchingWithOptions:launchOptions];
+  BOOL result = [super application:application didFinishLaunchingWithOptions:launchOptions];
+
+  // Window exists after super — protect on next run-loop tick so the RN root is attached.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [self enableScreenshotProtection];
+    [self screenCaptureChanged];
+  });
+
+  // Cover content while Control Center / QuickTime / AirPlay is capturing the display.
+  [[NSNotificationCenter defaultCenter] addObserver:self
+                                           selector:@selector(screenCaptureChanged)
+                                               name:UIScreenCapturedDidChangeNotification
+                                             object:nil];
+
+  return result;
 }
 
 - (NSURL *)sourceURLForBridge:(RCTBridge *)bridge
@@ -61,6 +77,58 @@
   );
 }
 
+/**
+ * iOS analogue of Android FLAG_SECURE: nest the key window layer under a
+ * secureTextEntry UITextField so system screenshots / recordings render black
+ * while the live UI stays interactive for the user.
+ */
+- (void)enableScreenshotProtection
+{
+  if (self.screenshotProtectionField != nil) {
+    return;
+  }
+
+  UIWindow *keyWindow = self.window;
+  if (keyWindow == nil) {
+    // Fallback — RN may expose the window slightly later on some devices.
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+      if (![scene isKindOfClass:[UIWindowScene class]]) {
+        continue;
+      }
+      for (UIWindow *candidate in ((UIWindowScene *)scene).windows) {
+        if (candidate.isKeyWindow) {
+          keyWindow = candidate;
+          break;
+        }
+      }
+      if (keyWindow != nil) {
+        break;
+      }
+    }
+  }
+  if (keyWindow == nil || keyWindow.layer.superlayer == nil) {
+    return;
+  }
+
+  UITextField *textField = [UITextField new];
+  textField.secureTextEntry = YES;
+  textField.userInteractionEnabled = NO;
+  textField.backgroundColor = UIColor.clearColor;
+
+  CALayer *windowSuperlayer = keyWindow.layer.superlayer;
+  [windowSuperlayer addSublayer:textField.layer];
+
+  CALayer *secureLayer = textField.layer.sublayers.firstObject;
+  if (secureLayer == nil) {
+    [textField.layer removeFromSuperlayer];
+    return;
+  }
+
+  [keyWindow.layer removeFromSuperlayer];
+  [secureLayer addSublayer:keyWindow.layer];
+  self.screenshotProtectionField = textField;
+}
+
 - (void)showPrivacyOverlay
 {
   if (self.privacyWindow == nil) {
@@ -82,6 +150,19 @@
   self.privacyWindow.hidden = YES;
 }
 
+/** Extra cover while the display is being recorded / mirrored (in case secure layer misses it). */
+- (void)screenCaptureChanged
+{
+  if (UIScreen.mainScreen.isCaptured) {
+    [self showPrivacyOverlay];
+    return;
+  }
+  // Only clear when foreground — resign-active still needs the app-switcher cover.
+  if (UIApplication.sharedApplication.applicationState == UIApplicationStateActive) {
+    [self hidePrivacyOverlay];
+  }
+}
+
 - (void)applicationWillResignActive:(UIApplication *)application
 {
   // Do not call [super ...] — RCTAppDelegate does not implement these selectors.
@@ -92,8 +173,17 @@
 
 - (void)applicationDidBecomeActive:(UIApplication *)application
 {
+  // Keep overlay up if screen recording / mirroring is still active.
+  if (UIScreen.mainScreen.isCaptured) {
+    return;
+  }
   // Native cover is snapshot-only; JS SessionPrivacyGate keeps the lock until biometry.
   [self hidePrivacyOverlay];
+}
+
+- (void)dealloc
+{
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 @end

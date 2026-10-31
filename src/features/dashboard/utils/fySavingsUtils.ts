@@ -26,10 +26,12 @@ function resolveFyClaimsRecoveredFromSummary(
 ): { thisYear: number; lastYear: number } {
   const recovered = savings?.fyClaimsRecovered;
 
+  // Do NOT use Number(object) — fyClaimsRecovered is often `{ thisYear, lastYear }`.
   if (recovered != null && typeof recovered === 'object') {
+    const row = recovered as { thisYear?: number; lastYear?: number; this_year?: number; last_year?: number };
     return {
-      thisYear: Number((recovered as { thisYear?: number }).thisYear) || 0,
-      lastYear: Number((recovered as { lastYear?: number }).lastYear) || 0,
+      thisYear: Number(row.thisYear ?? row.this_year) || Number(claims?.recoveredFY) || 0,
+      lastYear: Number(row.lastYear ?? row.last_year) || Number(claims?.recoveredLastFY) || 0,
     };
   }
 
@@ -45,9 +47,10 @@ function resolveFyIncentivePaidFromSummary(
   const incentive = savings?.fyIncentivePaid;
 
   if (incentive != null && typeof incentive === 'object') {
+    const row = incentive as { thisYear?: number; lastYear?: number; this_year?: number; last_year?: number };
     return {
-      thisYear: Number((incentive as { thisYear?: number }).thisYear) || 0,
-      lastYear: Number((incentive as { lastYear?: number }).lastYear) || 0,
+      thisYear: Number(row.thisYear ?? row.this_year) || 0,
+      lastYear: Number(row.lastYear ?? row.last_year) || 0,
     };
   }
 

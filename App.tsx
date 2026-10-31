@@ -7,11 +7,11 @@
  * - Passwords never stored on device
  * - MMKV encrypted with a per-install Keychain key
  * - Session privacy: opaque cover on inactive, idle timeout, biometry re-entry
- * - Android FLAG_SECURE blocks screenshots / Recents thumbnails
+ * - Android FLAG_SECURE + iOS secure UITextField blank screenshots / recordings / Recents
  * - BLOCK_ON_ROOT (jail-monkey) runs before restoreSession
  */
 
-import React, { useEffect, useState } from 'react';
+import  { useEffect, useState } from 'react';
 import { InteractionManager, LogBox, Platform, View } from 'react-native';
 import { Provider } from 'react-redux';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';

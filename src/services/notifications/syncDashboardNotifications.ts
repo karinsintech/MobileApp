@@ -3,8 +3,8 @@
  * mirrors them into the local notification inbox — same rules as the web portal.
  *
  * Each alert sets a short `body` for the in-app inbox summary and a multi-line
- * `detail` for the full message. The system tray flattens `detail` into one
- * visible line so OEMs do not hide content behind expand/collapse.
+ * `detail` for the full message. Android keeps newlines in the custom tray
+ * layout; iOS flattens them into a wrapping banner line.
  */
 
 import type { Announcement, ComplianceSummary, DashboardSummary } from '../../types/dashboard';
@@ -12,10 +12,42 @@ import { formatINR } from '../../utils/format';
 import { getDriverOpenAlertCount } from '../../features/dashboard/utils/dashboardSummaryUtils';
 import { getComplianceExpiringCount } from '../../features/compliance/utils/complianceNavigationUtils';
 import type { FleetNotification } from './notificationTypes';
-import { syncDerivedNotifications } from './notificationCenter';
+import {
+  CONDITION_BASED_DASHBOARD_IDS,
+  DASHBOARD_NOTIFICATION_ID_PREFIX,
+  syncDerivedNotifications,
+} from './notificationCenter';
 import { isCategoryAlertsEnabled } from './notificationPreferences';
 import { showDerivedFleetPush } from './localFleetNotificationService';
+import { pushService } from './pushService';
 import { evaluateWalletLowBalance, type WalletAlertScope } from './walletAlertUtils';
+
+/**
+ * Drop shade rows for dash alerts that are read or no longer active.
+ * Unread active rows stay in the tray (notified once via showDerivedFleetPush).
+ */
+function reconcileDerivedFleetTray(
+  derived: FleetNotification[],
+  synced: FleetNotification[],
+): void {
+  const activeIds = new Set(derived.map((row) => row.id));
+  const syncedById = new Map(synced.map((row) => [row.id, row]));
+
+  CONDITION_BASED_DASHBOARD_IDS.forEach((id) => {
+    const row = syncedById.get(id);
+    if (!row || row.read || !activeIds.has(id)) {
+      void pushService.cancelTrayNotification(id);
+    }
+  });
+
+  // Announcement dash-* ids are dynamic — cancel ones that left the derived set.
+  synced.forEach((row) => {
+    if (!row.id.startsWith(DASHBOARD_NOTIFICATION_ID_PREFIX)) return;
+    if (CONDITION_BASED_DASHBOARD_IDS.has(row.id)) return;
+    if (activeIds.has(row.id) && !row.read) return;
+    void pushService.cancelTrayNotification(row.id);
+  });
+}
 
 const COMPLIANCE_DOC_KEYS: (keyof Omit<ComplianceSummary, 'totalAlerts' | 'totalVehicles' | 'blacklistCount'>)[] = [
   'fitness', 'insurance', 'pucc', 'permit', 'tax', 'np',
@@ -209,7 +241,12 @@ export function deriveDashboardNotifications(
   return out;
 }
 
-/** Refresh dashboard-sourced alerts whenever the fleet summary changes. */
+/**
+ * Refresh dashboard-sourced alerts whenever the fleet summary changes.
+ * Unread rows post to the OS tray once (iOS-like clear body on Android);
+ * read / cleared rows are removed from the shade so they cannot re-buzz.
+ * `alertTray: false` skips tray posts (soft inbox refresh on app resume).
+ */
 export function syncDashboardNotifications(
   summary: DashboardSummary | null | undefined,
   scope?: WalletAlertScope,
@@ -217,19 +254,20 @@ export function syncDashboardNotifications(
 ): void {
   if (!summary) return;
 
+  const alertTray = options?.alertTray !== false;
   const derived = deriveDashboardNotifications(summary, scope);
-  syncDerivedNotifications(derived);
+  const synced = syncDerivedNotifications(derived);
 
-  // Inbox/badge refreshes update local rows only — tray heads-up is dashboard-owned
-  // so open-app fan-out does not keep re-posting the same alerts.
-  if (options?.alertTray === false) return;
+  reconcileDerivedFleetTray(derived, synced);
 
-  // Defer tray posts until after the first paint — posting Notifee during the
-  // login→dashboard transition native-crashes several OEM phones.
-  const rows = [...derived];
-  setTimeout(() => {
-    rows.forEach((row) => {
-      showDerivedFleetPush(row).catch(() => undefined);
-    });
-  }, 1500);
+  if (!alertTray) return;
+
+  // Notify once per unread alert — cooldown inside showDerivedFleetPush
+  // suppresses re-buzz while the same unread row remains in the tray.
+  synced.forEach((row) => {
+    if (!row.id.startsWith(DASHBOARD_NOTIFICATION_ID_PREFIX)) return;
+    if (row.read) return;
+    if (!derived.some((d) => d.id === row.id)) return;
+    void showDerivedFleetPush(row);
+  });
 }

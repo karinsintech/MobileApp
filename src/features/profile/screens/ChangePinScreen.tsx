@@ -1,6 +1,7 @@
 /**
  * Change the logged-in user's 4-digit account PIN.
- * Requires the current PIN so an unattended session cannot silently take over (MM-03).
+ * Authenticated session is enough — no current-PIN step (users who forgot
+ * the old PIN can still set a replacement after password login).
  */
 
 import React, { useState } from 'react';
@@ -15,13 +16,6 @@ import {
   View,
 } from 'react-native';
 import { userApi } from '../../../services/api/userApi';
-import {
-  assertPinAttemptAllowed,
-  clearPinAttempts,
-  recordPinFailure,
-} from '../../../services/auth/pinAttemptGuard';
-import { SecureStorage } from '../../../services/storage/SecureStorage';
-import { useAppSelector } from '../../../store';
 import { LiquidBackground, GlassCard, ScreenHeader } from '../../../components';
 import { Colors, FontSize, Spacing, Radius } from '../../../theme';
 import type { MoreScreenProps } from '../../../navigation/types';
@@ -55,24 +49,14 @@ function PinField({
 }
 
 export default function ChangePinScreen({ navigation }: Props) {
-  const userId = useAppSelector((s) => s.auth.user?.userId);
-  const [currentPin, setCurrentPin] = useState('');
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Scope lockout to this account — never the masked hint string.
-  const attemptScope =
-    SecureStorage.getLastLoginMobile() ?? `user:${userId ?? 'session'}`;
-
   const handleSubmit = async () => {
     setError(null);
 
-    if (currentPin.length !== 4) {
-      setError('Enter your current 4-digit PIN.');
-      return;
-    }
     if (pin.length !== 4) {
       setError('New PIN must be exactly 4 digits.');
       return;
@@ -81,45 +65,18 @@ export default function ChangePinScreen({ navigation }: Props) {
       setError('New PIN and confirmation do not match.');
       return;
     }
-    if (pin === currentPin) {
-      setError('New PIN must be different from the current PIN.');
-      return;
-    }
-
-    const lockError = assertPinAttemptAllowed(attemptScope);
-    if (lockError) {
-      setError(lockError);
-      return;
-    }
 
     setLoading(true);
     try {
-      // Prove possession of the current PIN before accepting a replacement.
-      const { data: verified } = await userApi.verifyPin({ pin: currentPin });
-      if (!verified?.isVerified) {
-        setError(recordPinFailure(attemptScope));
-        setCurrentPin('');
-        return;
-      }
-
       await userApi.changePin({
-        currentPin,
         pin,
         confirmPin,
       });
-      clearPinAttempts(attemptScope);
       Alert.alert('Success', 'PIN changed successfully.', [
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);
     } catch (err: any) {
-      const message = err?.message ?? 'Could not change PIN. Please try again.';
-      // Wrong current PIN from the API still counts toward lockout.
-      if (/pin|incorrect|invalid|unauthorized|403|401/i.test(String(message))) {
-        setError(recordPinFailure(attemptScope));
-        setCurrentPin('');
-      } else {
-        setError(message);
-      }
+      setError(err?.message ?? 'Could not change PIN. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -130,11 +87,10 @@ export default function ChangePinScreen({ navigation }: Props) {
       <ScreenHeader title="Change PIN" showBack />
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         <Text style={styles.subtitle}>
-          Enter your current PIN, then choose a new 4-digit PIN.
+          Choose a new 4-digit PIN for quick login on this account.
         </Text>
 
         <GlassCard style={styles.card}>
-          <PinField label="Current PIN" value={currentPin} onChangeText={setCurrentPin} />
           <PinField label="New PIN" value={pin} onChangeText={setPin} />
           <PinField label="Confirm new PIN" value={confirmPin} onChangeText={setConfirmPin} />
 

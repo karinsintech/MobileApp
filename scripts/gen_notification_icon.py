@@ -43,14 +43,22 @@ def source_to_silhouette(source: Image.Image, size: int) -> Image.Image:
     cropped = src.crop(bbox)
 
     # Leave breathing room so OEM status bars do not clip the glyph.
+    # Must resize (not thumbnail) — source art is 50px; thumbnail never
+    # upscales, which left xxhdpi/xxxhdpi with a tiny K that vanishes on
+    # high-DPI trays when OEMs promote smallIcon into the left avatar slot.
     padding = max(2, int(size * 0.1))
     inner = max(1, size - padding * 2)
-    cropped.thumbnail((inner, inner), Image.Resampling.LANCZOS)
+    scale = min(inner / cropped.width, inner / cropped.height)
+    target = (
+        max(1, int(round(cropped.width * scale))),
+        max(1, int(round(cropped.height * scale))),
+    )
+    scaled = cropped.resize(target, Image.Resampling.LANCZOS)
 
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    offset_x = (size - cropped.width) // 2
-    offset_y = (size - cropped.height) // 2
-    canvas.paste(cropped, (offset_x, offset_y), cropped)
+    offset_x = (size - scaled.width) // 2
+    offset_y = (size - scaled.height) // 2
+    canvas.paste(scaled, (offset_x, offset_y), scaled)
     return canvas
 
 

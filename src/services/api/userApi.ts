@@ -4,8 +4,8 @@ export const userApi = {
   setPin: (payload: { pin: string; confirmPin: string }) =>
     apiClient.post('/user/set-pin', payload),
 
+  // currentPin omitted so a logged-in user can replace a forgotten PIN.
   changePin: (payload: {
-    currentPin: string;
     pin: string;
     confirmPin: string;
   }) => apiClient.put('/user/change-pin', payload),

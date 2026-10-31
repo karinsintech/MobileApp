@@ -6,10 +6,17 @@
 import type { ClaimStatusGroup, ClaimsSummary } from '../../types/dashboard';
 import type { ClaimListRow } from '../../services/api/claimsApi';
 
-export type ClaimFilter = 'ALL' | 'WAITING_FOR_DOC' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
+export type ClaimFilter =
+  | 'ALL'
+  | 'PENDING'
+  | 'WAITING_FOR_DOC'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'EXPIRED';
 
 export const CLAIM_FILTER_OPTS = [
   'ALL',
+  'PENDING',
   'WAITING_FOR_DOC',
   'APPROVED',
   'REJECTED',
@@ -112,6 +119,7 @@ export function computeClaimFilterCounts(
 ): Record<ClaimFilter, number> {
   const counts: Record<ClaimFilter, number> = {
     ALL: totalAll,
+    PENDING: 0,
     WAITING_FOR_DOC: 0,
     APPROVED: 0,
     REJECTED: 0,
@@ -138,6 +146,7 @@ export function claimsSummaryToFilterCounts(
 ): Record<ClaimFilter, number> {
   return {
     ALL: summary?.total ?? fallbackTotal,
+    PENDING: summary?.pending ?? 0,
     WAITING_FOR_DOC: summary?.waitingForDoc ?? 0,
     APPROVED: summary?.approved ?? 0,
     REJECTED: summary?.rejected ?? 0,

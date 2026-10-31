@@ -40,7 +40,7 @@ export type ClaimsStackParamList = {
     initialVehicleNo?: string;
     initialTollName?: string;
     /** Dashboard Claims card deep-link — selects the matching status chip. */
-    initialFilter?: 'ALL' | 'WAITING_FOR_DOC' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
+    initialFilter?: 'ALL' | 'PENDING' | 'WAITING_FOR_DOC' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
   } | undefined;
   // Pass the fully-mapped record from the list so the detail renders instantly
   // without depending on a separate /debit/:id shape that may differ.
@@ -110,8 +110,6 @@ export type MoreStackParamList = {
   ChangePassword:    undefined;
   SetPin:            undefined;
   ChangePin:         undefined;
-  SetAppLockPin:     undefined;
-  ChangeAppLockPin:  undefined;
   LowBalanceThreshold: undefined;
   Notifications:     { title?: string } | undefined;
   TagInventory:      undefined;

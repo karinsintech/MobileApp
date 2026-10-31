@@ -1,6 +1,7 @@
 /**
- * In-app e-Challan checkout — loads gateway HTML (Razorpay baseUrl) or a payment URL.
- * Mirrors web EchallanContainer iframe checkout with UPI intent and postMessage hooks.
+ * In-app e-Challan checkout — loads Finii paymentLink (or legacy Razorpay HTML) in a
+ * WebView modal so Pay never leaves the app for the system browser.
+ * Finii returnUrl is intercepted here; outcome is resolved via /payment-status.
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -29,6 +30,7 @@ import {
 import {
   isAllowedChallanPopupUrl,
   parseChallanPaymentNavigation,
+  parseFiniiPaymentReturn,
   shouldOpenPaymentExternally,
   type ChallanPaymentEventType,
 } from '../utils/parseChallanPaymentNavigation';
@@ -39,6 +41,10 @@ export type { ChallanPaymentEventType };
 export interface ChallanPaymentEventMeta {
   /** Token-validated gateway postMessage — safe to sync server cancel. */
   fromPostMessage?: boolean;
+  /** Present when Finii redirected back to /echallan/list with session keys. */
+  requestId?: string;
+  challanNumber?: string;
+  fromFiniiReturn?: boolean;
 }
 
 interface ChallanPaymentCheckoutModalProps {
@@ -74,6 +80,17 @@ export default function ChallanPaymentCheckoutModal({
   const handleNavigationUrl = useCallback((url: string): boolean => {
     if (!url || url.startsWith('data:') || url === 'about:blank') return false;
 
+    // Prefer Finii return keys so we can pass requestId into /payment-status.
+    const finiiReturn = parseFiniiPaymentReturn(url);
+    if (finiiReturn) {
+      emitEvent('PAYMENT_GATEWAY_RETURN', {
+        fromFiniiReturn: true,
+        requestId: finiiReturn.requestId,
+        challanNumber: finiiReturn.challanNumber,
+      });
+      return true;
+    }
+
     const eventType = parseChallanPaymentNavigation(url);
     if (eventType) {
       emitEvent(eventType);
@@ -98,6 +115,7 @@ export default function ChallanPaymentCheckoutModal({
       };
 
       if (data.paymentMessageToken !== checkout.paymentMessageToken) return;
+      // Legacy Razorpay HTML hooks only — Finii uses returnUrl interception instead.
       if (
         data.type !== 'PAYMENT_SUCCESS'
         && data.type !== 'PAYMENT_FAILED'

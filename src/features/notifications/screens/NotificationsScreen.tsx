@@ -14,7 +14,6 @@ import { Colors, FontSize, Spacing, Radius } from '../../../theme';
 import { fmtDateTime } from '../../../utils/format';
 import {
   getVisibleNotifications,
-  isConditionBasedDashboardRow,
   loadNotifications,
   markAllNotificationsRead,
   markNotificationRead,
@@ -158,14 +157,12 @@ export default function NotificationsScreen() {
 
   const markRead = useCallback((id: string) => {
     const target = loadNotifications().find((row) => row.id === id);
-    if (target && isConditionBasedDashboardRow(target)) {
-      return;
-    }
     // Already opened — keep card as-is (no style flash / no re-prune).
     if (target?.read) {
       return;
     }
 
+    // Dash ops alerts (DL/Vahan/Claim/Challan) mark read locally; numeric API ids sync to server.
     markNotificationRead(id);
     // Update in place so the row never drops out of the list on click.
     setItems((prev) =>
@@ -182,11 +179,7 @@ export default function NotificationsScreen() {
 
   const markAllRead = useCallback(() => {
     markAllNotificationsRead();
-    setItems((prev) =>
-      prev.map((row) =>
-        (isConditionBasedDashboardRow(row) ? row : { ...row, read: true }),
-      ),
-    );
+    setItems((prev) => prev.map((row) => ({ ...row, read: true })));
     void notificationApi.markAllRead().catch(() => {
       /* local read already applied */
     });
@@ -224,12 +217,8 @@ export default function NotificationsScreen() {
     const action = resolveNotificationAction(item);
     if (!action) return;
 
-    if (!isConditionBasedDashboardRow(item)) {
-      markNotificationRead(item.id);
-      setItems((prev) =>
-        prev.map((row) => (row.id === item.id ? { ...row, read: true } : row)),
-      );
-    }
+    // View DL/RC/Claims/Challan also dismisses the unread dot.
+    markRead(item.id);
 
     if (action.kind === 'tab') {
       navigation.navigate(action.tab, {
@@ -245,9 +234,9 @@ export default function NotificationsScreen() {
     }
 
     navigation.navigate(action.screen);
-  }, [navigation]);
+  }, [markRead, navigation]);
 
-  const hasUnread = items.some((item) => !item.read || isConditionBasedDashboardRow(item));
+  const hasUnread = items.some((item) => !item.read);
 
   const renderCard = (item: FleetNotification) => {
     const action = resolveNotificationAction(item);
@@ -255,8 +244,8 @@ export default function NotificationsScreen() {
     const displayText = item.detail?.trim() || item.body;
     const complianceRows = item.category === 'rc_expiry' ? parseComplianceBody(displayText) : [];
 
-    // Unread = darker card; opened = lighter card. No press opacity fade.
-    const isUnread = !item.read || isConditionBasedDashboardRow(item);
+    // Unread = darker card + blue dot; opened = lighter card.
+    const isUnread = !item.read;
     // Pass raw path — NotificationImagePreview rewrites /uploads/notification → /uploads + retries.
     const rawImage = item.image ?? item.data?.image;
 
@@ -273,9 +262,7 @@ export default function NotificationsScreen() {
             openBroadcastDetail(item);
             return;
           }
-          if (!isConditionBasedDashboardRow(item)) {
-            markRead(item.id);
-          }
+          markRead(item.id);
         }}
       >
         <GlassCard

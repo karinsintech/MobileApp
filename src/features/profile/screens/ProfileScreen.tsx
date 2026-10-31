@@ -19,7 +19,12 @@ import {
   enablePinLogin,
   fetchPinStatus,
 } from '../../../services/auth/pinAuthService';
-import { hasAppLockPin } from '../../../services/auth/appLockPinService';
+import {
+  getBiometricLoginLabel,
+  isBiometricLoginEnabled,
+  setBiometricLoginEnabled,
+} from '../../../services/auth/biometricLoginService';
+import { isDeviceBiometryAvailable } from '../../../services/session/sessionPrivacy';
 import { profileApi } from '../../../services/api/profileApi';
 import { walletApi } from '../../../services/api/walletApi';
 import { LiquidBackground, GlassCard, ScreenHeader } from '../../../components';
@@ -133,9 +138,11 @@ export default function ProfileScreen() {
   const roleKey = user?.roleKey;
 
   const [pinLoginEnabled, setPinLoginEnabled] = useState(false);
+  const [biometricLoginOn, setBiometricLoginOn] = useState(false);
   const [hasPinSet, setHasPinSet] = useState(false);
-  const [hasAppLock, setHasAppLock] = useState(false);
+  const [deviceBiometryAvailable, setDeviceBiometryAvailable] = useState(false);
   const [pinBusy, setPinBusy] = useState(false);
+  const biometricLoginLabel = getBiometricLoginLabel();
   const [notifPrefs, setNotifPrefs] = useState(loadNotificationPreferences());
   const [lowBalanceThresholdLabel, setLowBalanceThresholdLabel] = useState('—');
 
@@ -293,7 +300,7 @@ export default function ProfileScreen() {
           ?.message;
       Alert.alert(
         'Unable to refresh',
-        apiMessage || 'Unable to fetch balance. Please try again later.',
+        apiMessage as string || 'Unable to fetch balance. Please try again later.',
       );
     } finally {
       setRefreshingBalance(false);
@@ -305,7 +312,8 @@ export default function ProfileScreen() {
   const loadPinPrefs = useCallback(async () => {
     try {
       setPinLoginEnabled(SecureStorage.isPinLoginEnabled());
-      setHasAppLock(hasAppLockPin());
+      setBiometricLoginOn(isBiometricLoginEnabled());
+      setDeviceBiometryAvailable(await isDeviceBiometryAvailable());
       if (accountMobile.length === 10) {
         const pinSet = await fetchPinStatus(accountMobile);
         setHasPinSet(pinSet);
@@ -314,8 +322,9 @@ export default function ProfileScreen() {
       }
     } catch {
       setPinLoginEnabled(false);
+      setBiometricLoginOn(false);
       setHasPinSet(false);
-      setHasAppLock(hasAppLockPin());
+      setDeviceBiometryAvailable(false);
     }
   }, [accountMobile]);
 
@@ -365,8 +374,27 @@ export default function ProfileScreen() {
     }
   }, [accountMobile, hasPinSet, nav, pinBusy]);
 
+  /**
+   * Login-screen Fingerprint / Face ID — no mobile number.
+   * Keeps the Keychain session so Sign Out soft-locks instead of wiping.
+   */
+  const handleToggleBiometricLogin = useCallback((next: boolean) => {
+    if (next && !deviceBiometryAvailable) {
+      Alert.alert(
+        biometricLoginLabel,
+        `${biometricLoginLabel} is not available on this device. Enroll it in system settings first.`,
+      );
+      return;
+    }
+    setBiometricLoginEnabled(next);
+    setBiometricLoginOn(next);
+  }, [biometricLoginLabel, deviceBiometryAvailable]);
+
   const handleLogout = () => {
-    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
+    const softLockMessage = biometricLoginOn
+      ? `This locks the app. Use ${biometricLoginLabel} on the sign-in screen to continue — no mobile number needed. To fully remove your account from this device, use Forget This Device.`
+      : 'Are you sure you want to sign out?';
+    Alert.alert('Sign Out', softLockMessage, [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Sign Out',
@@ -378,18 +406,13 @@ export default function ProfileScreen() {
     ]);
   };
 
-  // MM-07/R6 restore, merged forward into R7: this UI entry point was removed
-  // (again) while SecureStorage.forgetThisDevice() and signOut({forgetDevice:true})
-  // — the underlying, still-fully-functional service and thunk — were left in
-  // place with no caller. Without this, a user signing out on a shared/borrowed
-  // device left their PIN hash/hint (and now also their App Lock PIN hash) behind
-  // for the next person who opens the app on that handset to inherit. Kept in
-  // SECURITY next to the other PIN controls since that's exactly what this wipes.
+  // Wipes PIN hash/hint + biometric login so a shared/borrowed handset does not
+  // leave quick-login affordances for the next person (MM-07).
   const handleForgetDevice = () => {
     Alert.alert(
       'Forget This Device',
-      'This signs you out and removes your saved PIN and app lock PIN from this device. ' +
-        'Anyone else using this device afterwards will need to sign in with mobile number and OTP again.',
+      'This signs you out and removes your saved PIN and biometric login from this device. ' +
+        'Anyone else using this device afterwards will need to sign in with mobile number and password again.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -549,12 +572,6 @@ export default function ProfileScreen() {
       <Text style={styles.sectionLabel}>SECURITY</Text>
       <GlassCard style={styles.section}>
         <SettingRow
-          icon="🔒"
-          label={hasAppLock ? 'Change App Lock PIN' : 'Set App Lock PIN'}
-          onPress={() => nav.navigate(hasAppLock ? 'ChangeAppLockPin' : 'SetAppLockPin')}
-        />
-        <View style={styles.divider} />
-        <SettingRow
           icon="🔢"
           label={hasPinSet ? 'Change PIN' : 'Set PIN'}
           onPress={() => nav.navigate(hasPinSet ? 'ChangePin' : 'SetPin')}
@@ -562,10 +579,18 @@ export default function ProfileScreen() {
         <View style={styles.divider} />
         <SettingRow
           icon="⚡"
-          label="Quick PIN Login"
+          label="PIN Login"
           toggle
           toggleValue={pinLoginEnabled}
           onToggle={handleTogglePinLogin}
+        />
+        <View style={styles.divider} />
+        <SettingRow
+          icon={biometricLoginLabel === 'Face Lock' ? '😊' : '👆'}
+          label={biometricLoginLabel}
+          toggle
+          toggleValue={biometricLoginOn}
+          onToggle={handleToggleBiometricLogin}
         />
         <View style={styles.divider} />
         <SettingRow

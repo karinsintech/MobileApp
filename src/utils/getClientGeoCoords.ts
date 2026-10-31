@@ -187,6 +187,11 @@ export async function getClientGeoCoords(
   timeoutMs = 10_000,
 ): Promise<ClientGeoCoords | null> {
   try {
+    // LoginScreen warm-up already filled memory — do not block Sign In / PIN
+    // on another satellite lock while that fix is still fresh.
+    const fresh = getFreshCachedGeo();
+    if (fresh) return fresh;
+
     const allowed = await ensureLocationPermission();
     if (!allowed) return getPersistedGeo();
 

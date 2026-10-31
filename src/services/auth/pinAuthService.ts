@@ -12,7 +12,7 @@ import {
   clearPinAttempts,
   recordPinFailure,
 } from './pinAttemptGuard';
-import { getClientGeoCoords } from '../../utils/getClientGeoCoords';
+import { getCachedOrFreshGeoCoords } from '../../utils/getClientGeoCoords';
 
 export type PinSignInResult =
   | { status: 'success'; sessionData: LoginResponse }
@@ -73,8 +73,9 @@ export async function signInWithPinLogin(
   }
 
   try {
-    // Location is mandatory — same gate as password sign-in / API schema
-    const geo = await getClientGeoCoords(12_000);
+    // Prefer LoginScreen warm-up / MMKV — a cold GPS lock after the 4th digit
+    // made PIN submit feel frozen even when location was already available.
+    const geo = await getCachedOrFreshGeoCoords(8_000);
     if (!geo) {
       return {
         status: 'error',
@@ -103,13 +104,66 @@ export async function signInWithPinLogin(
   }
 }
 
+/**
+ * Process-local mobile for PIN quick-login — avoids asking on the Login form.
+ * Seeded on enable / successful login; cleared on disable / forget device.
+ * Survives navigation but not process death (disk fallback: last_login_mobile).
+ */
+let pinLoginMobileMemory: string | null = null;
+
+/** Keeps the number the PIN API needs without putting it on the Login form. */
+export function rememberPinLoginMobile(mobileNumber: string): void {
+  const trimmed = mobileNumber.trim();
+  if (trimmed.length !== 10) return;
+  pinLoginMobileMemory = trimmed;
+  // Disk copy so PIN-only popup still works after logout / cold start.
+  SecureStorage.setLastLoginMobile(trimmed);
+}
+
+export function clearPinLoginMobileMemory(): void {
+  pinLoginMobileMemory = null;
+}
+
+/**
+ * Resolves the account mobile for PIN sign-in without a Login-form field.
+ * Prefers in-memory value, then last_login_mobile, then verifies against the device hash.
+ */
+export function resolvePinLoginMobile(): string | null {
+  // Already bound this process — return immediately (no bcrypt / disk).
+  if (pinLoginMobileMemory && pinLoginMobileMemory.length === 10) {
+    return pinLoginMobileMemory;
+  }
+
+  const candidates = [SecureStorage.getLastLoginMobile()];
+  for (const raw of candidates) {
+    const mobile = raw?.trim() ?? '';
+    if (mobile.length !== 10) continue;
+    if (
+      SecureStorage.hasPinLoginIdentity()
+      && !SecureStorage.verifyPinLoginMobile(mobile)
+    ) {
+      continue;
+    }
+    // Re-seed memory so later taps in this process skip disk + bcrypt.
+    pinLoginMobileMemory = mobile;
+    return mobile;
+  }
+  return null;
+}
+
 export function enablePinLogin(mobileNumber: string): void {
   SecureStorage.setPinLoginEnabled(true);
-  SecureStorage.setPinLoginMobile(mobileNumber);
+  // Skip bcrypt.hashSync when this number is already the bound identity —
+  // re-hashing on every successful PIN sign-in froze the UI after the 4th digit.
+  if (!SecureStorage.verifyPinLoginMobile(mobileNumber)) {
+    SecureStorage.setPinLoginMobile(mobileNumber);
+  }
+  rememberPinLoginMobile(mobileNumber);
 }
 
 export function disablePinLogin(): void {
   SecureStorage.clearPinLoginIdentity();
+  clearPinLoginMobileMemory();
 }
 
 export async function syncPinLoginPreference(mobileNumber: string): Promise<void> {

@@ -20,15 +20,76 @@ import {
 
 export const NOTIFICATIONS_CACHE_KEY = 'notifications_center';
 const NOTIFICATIONS_IMAGE_FIX_KEY = 'notifications_center_image_fix';
+/**
+ * Survives logout — once the user opens a dash-* alert it stays dismissed
+ * until that alert drops out of the derived set (issue cleared).
+ * Map: notification id → "1" (sticky dismiss; body/amount changes must NOT re-open).
+ */
+export const DERIVED_ALERT_READ_KEY = 'derived_alert_read_fingerprints';
+const DERIVED_ALERT_DISMISSED = '1';
 /** Bump when image URL rules change so stale rewritten paths are dropped. */
 const NOTIFICATIONS_IMAGE_FIX_VERSION = 7;
 const MAX_STORED_NOTIFICATIONS = 200;
+
+type DerivedAlertReadMap = Record<string, string>;
+
+function loadDerivedAlertReadMap(): DerivedAlertReadMap {
+  return Cache.getJSON<DerivedAlertReadMap>(DERIVED_ALERT_READ_KEY) ?? {};
+}
+
+function saveDerivedAlertReadMap(map: DerivedAlertReadMap): void {
+  Cache.setJSON(DERIVED_ALERT_READ_KEY, map);
+}
+
+/** Remember a dismissed dash alert so re-login / amount ticks stay read. */
+function rememberDerivedAlertRead(row: FleetNotification): void {
+  if (!isConditionBasedDashboardRow(row)) return;
+  const next = {
+    ...loadDerivedAlertReadMap(),
+    [row.id]: DERIVED_ALERT_DISMISSED,
+  };
+  saveDerivedAlertReadMap(next);
+}
+
+/**
+ * Snapshot before Cache.clearAll on logout — restored afterward so opened
+ * DL/Vahan/Claim/Challan alerts do not resurrect as unread.
+ */
+export function snapshotDerivedAlertReadState(): DerivedAlertReadMap {
+  const fromInbox: DerivedAlertReadMap = {};
+  for (const row of loadNotifications()) {
+    if (isConditionBasedDashboardRow(row) && row.read) {
+      fromInbox[row.id] = DERIVED_ALERT_DISMISSED;
+    }
+  }
+  // Merge inbox reads over any previously persisted map (inbox is source of truth).
+  return { ...loadDerivedAlertReadMap(), ...fromInbox };
+}
+
+export function restoreDerivedAlertReadState(map: DerivedAlertReadMap): void {
+  if (!map || Object.keys(map).length === 0) return;
+  saveDerivedAlertReadMap(map);
+}
 
 /** Prefix for alerts derived from the dashboard summary. */
 export const DASHBOARD_NOTIFICATION_ID_PREFIX = 'dash-';
 
 /** Broadcast rows synced from Node GET /notification. */
 export const BROADCAST_CATEGORY = 'broadcast';
+
+/**
+ * Admin welcome copy that should never surface as unread / toast / tray buzz.
+ * Matched by title so a fixed server id is not required across environments.
+ */
+const ALWAYS_READ_BROADCAST_TITLES = new Set([
+  'welcome to the new fleet command dashboard',
+]);
+
+/** True when this broadcast should stay permanently read on device + server. */
+export function isAlwaysReadBroadcast(title: string | null | undefined): boolean {
+  const normalized = String(title ?? '').trim().toLowerCase();
+  return ALWAYS_READ_BROADCAST_TITLES.has(normalized);
+}
 
 function isEmptyImageValue(value: string): boolean {
   return !value
@@ -211,6 +272,18 @@ export function loadNotifications(): FleetNotification[] {
     saveNotifications(items);
   }
 
+  // Flip cached welcome/boilerplate rows to read so an old unread cache cannot
+  // keep showing the badge until the next API sync.
+  let alwaysReadDirty = false;
+  items = items.map((row) => {
+    if (!isAlwaysReadBroadcast(row.title) || row.read) return row;
+    alwaysReadDirty = true;
+    return { ...row, read: true };
+  });
+  if (alwaysReadDirty) {
+    saveNotifications(items);
+  }
+
   // Newest first even when cache was written by an older build.
   return sortNotificationsNewestFirst(items);
 }
@@ -241,12 +314,9 @@ function inboxFingerprint(items: FleetNotification[]): string {
     .join('\u001e');
 }
 
-/** Badge count — unread only (condition-based ops alerts always count while present). */
+/** Badge count — unread only (opened dash alerts no longer inflate the badge). */
 export function getUnreadNotificationCount(): number {
-  return loadNotifications().filter((row) => {
-    if (isConditionBasedDashboardRow(row)) return true;
-    return !row.read;
-  }).length;
+  return loadNotifications().filter((row) => !row.read).length;
 }
 
 /**
@@ -290,12 +360,18 @@ export function upsertNotification(item: FleetNotification): FleetNotification[]
 
 /**
  * Replace dashboard-derived alerts; leave broadcast (API) rows in place.
+ * Once a condition-based alert is opened it stays read across sync/login/amount
+ * ticks until the issue clears (row leaves the derived set).
  */
 export function syncDerivedNotifications(
   derived: FleetNotification[],
 ): FleetNotification[] {
   const existing = loadNotifications();
   const nonDashboard = existing.filter((row) => !isDashboardRow(row));
+  const persistedReads = loadDerivedAlertReadMap();
+  let persistedDirty = false;
+  const nextPersisted = { ...persistedReads };
+  const derivedIds = new Set(derived.map((row) => row.id));
 
   const mergedDerived = derived.map((item) => {
     const prior = existing.find((row) => row.id === item.id);
@@ -303,12 +379,29 @@ export function syncDerivedNotifications(
     // (otherwise every sync stamps “now” and DL/wallet cards jump above older admin rows).
     const createdAt = prior?.createdAt ?? item.createdAt;
 
-    // Wallet/challan/compliance alerts must not stay “read” after mark-all — issue still open
     if (isConditionBasedDashboardRow(item)) {
+      // Sticky dismiss: prior read OR persisted id — body/₹ changes must not re-open.
+      const wasDismissed = Boolean(prior?.read) || Boolean(persistedReads[item.id]);
+      if (wasDismissed) {
+        return { ...item, createdAt, read: true };
+      }
       return { ...item, createdAt, read: false };
     }
+
     return prior ? { ...item, createdAt, read: prior.read } : item;
   });
+
+  // Issue cleared (no longer in summary) — allow a future recurrence to alert once.
+  for (const id of Object.keys(nextPersisted)) {
+    if (!derivedIds.has(id) && CONDITION_BASED_DASHBOARD_IDS.has(id)) {
+      delete nextPersisted[id];
+      persistedDirty = true;
+    }
+  }
+
+  if (persistedDirty) {
+    saveDerivedAlertReadMap(nextPersisted);
+  }
 
   const next = [...mergedDerived, ...nonDashboard];
   // Avoid notification-menu flicker when dashboard/badge poll re-writes the same rows.
@@ -343,17 +436,21 @@ function mapApiRowToFleetNotification(row: NotificationListRow): FleetNotificati
   const rawImage = String(row.image ?? row.image_path ?? '').trim() || null;
   const image = rawImage && !isBrokenMediaRouteUrl(rawImage) ? rawImage : undefined;
 
+  const title = row.text || 'Notification';
+  // Welcome / boilerplate broadcasts stay read so they never inflate the badge.
+  const alwaysRead = isAlwaysReadBroadcast(title);
+
   return {
     id: String(row.id),
     category: BROADCAST_CATEGORY,
-    title: row.text || 'Notification',
+    title,
     body: shortBody,
     detail: fullText || shortBody || undefined,
     image,
     createdAt,
     scheduledAt,
     expiresAt,
-    read: Boolean(row.isRead),
+    read: alwaysRead || Boolean(row.isRead),
     data: {
       type: String(row.type ?? 1),
       page: '1',
@@ -375,13 +472,23 @@ export async function syncBroadcastNotificationsFromApi(): Promise<FleetNotifica
     const rows = await notificationApi.list(50);
     const broadcasts = rows.map(mapApiRowToFleetNotification);
 
+    // Keep server read-state in sync for boilerplate welcome rows still flagged unread.
+    for (const row of rows) {
+      if (row.isRead) continue;
+      if (!isAlwaysReadBroadcast(row.text)) continue;
+      void notificationApi.markRead(row.id).catch(() => undefined);
+    }
+
     const existing = loadNotifications();
     const dashboardAndOther = existing.filter((row) => !isBroadcastRow(row));
 
     // Preserve local read state when API omits isRead, but never keep stale images.
     const mergedBroadcasts = broadcasts.map((item) => {
       const prior = existing.find((row) => row.id === item.id);
-      if (!prior) return item;
+      const forceRead = isAlwaysReadBroadcast(item.title);
+      if (!prior) {
+        return forceRead ? { ...item, read: true } : item;
+      }
       return {
         ...item,
         // API image wins; only keep prior artwork when API row has none.
@@ -395,7 +502,7 @@ export async function syncBroadcastNotificationsFromApi(): Promise<FleetNotifica
               ? { image: prior.data.image }
               : {}),
         },
-        read: item.read || prior.read,
+        read: forceRead || item.read || prior.read,
       };
     });
 
@@ -423,25 +530,40 @@ export async function syncBroadcastNotificationsFromApi(): Promise<FleetNotifica
 export function markNotificationRead(id: string): FleetNotification[] {
   // Mark opened — do not remove; UI switches unread (dark) → read (light).
   const existing = loadNotifications();
-  const next = existing.map((row) => (row.id === id ? { ...row, read: true } : row));
+  const next = existing.map((row) => {
+    if (row.id !== id) return row;
+    const opened = { ...row, read: true };
+    // Persist fingerprint so re-login with the same counts stays dismissed.
+    rememberDerivedAlertRead(opened);
+    return opened;
+  });
 
   saveNotifications(next);
   notificationEvents.emit();
+  // Unread → read: clear the OS shade so the same alert cannot re-notify.
+  void import('./pushService')
+    .then(({ pushService }) => pushService.cancelTrayNotification(id))
+    .catch(() => undefined);
   return loadNotifications();
 }
 
 export function markAllNotificationsRead(): FleetNotification[] {
   const existing = loadNotifications();
-  // Mark-all opens every row except condition-based ops alerts (issue still open).
+  // Mark-all opens every row, including dash ops alerts the user has acknowledged.
   const next = existing.map((row) => {
-    if (isConditionBasedDashboardRow(row)) {
-      return { ...row, read: false };
-    }
-    return { ...row, read: true };
+    const opened = { ...row, read: true };
+    rememberDerivedAlertRead(opened);
+    return opened;
   });
 
   saveNotifications(next);
   notificationEvents.emit();
+  // Clear every shade row that belonged to the inbox so nothing re-buzzes.
+  void import('./pushService')
+    .then(({ pushService }) =>
+      Promise.all(existing.map((row) => pushService.cancelTrayNotification(row.id))),
+    )
+    .catch(() => undefined);
   return loadNotifications();
 }
 
@@ -484,10 +606,12 @@ export function fleetNotificationFromTrayPayload(input: {
   const scheduledAt = data.scheduledAt ?? null;
   const expiresAt = data.expiresAt ?? null;
 
+  const title = input.title ?? data.title ?? 'Karins Fleet';
+
   return {
     id: input.id,
     category: String(data.category ?? data.type ?? 'product_update'),
-    title: input.title ?? data.title ?? 'Karins Fleet',
+    title,
     body: input.body ?? data.body ?? '',
     image,
     createdAt: parsePlausibleNotificationTimestamp(
@@ -495,7 +619,7 @@ export function fleetNotificationFromTrayPayload(input: {
     ),
     scheduledAt,
     expiresAt,
-    read: false,
+    read: isAlwaysReadBroadcast(title),
     data,
   };
 }
@@ -549,7 +673,8 @@ export function mapRemoteMessageToNotification(
     ),
     scheduledAt,
     expiresAt,
-    read: false,
+    // Welcome Fleet Command copy never lands as unread via push either.
+    read: isAlwaysReadBroadcast(title),
     data,
   };
 }

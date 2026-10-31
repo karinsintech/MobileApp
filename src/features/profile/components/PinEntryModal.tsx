@@ -1,11 +1,15 @@
 /**
- * PIN entry modal — explicit Continue submit (no auto-submit on 4th digit).
+ * PIN entry overlay — submits as soon as the 4th digit is entered (no Continue).
  * Errors and lockout messages render inside the card (MM-03).
+ *
+ * Not an RN <Modal>: Android Dialog windows often focus the field (caret blinks)
+ * but never open the soft keyboard. This absolute overlay stays in the Activity
+ * window so the number pad appears, while a transparent scrim keeps the login
+ * background visible underneath.
  */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Modal,
   View,
   Text,
   TextInput,
@@ -14,6 +18,8 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  BackHandler,
+  Keyboard,
 } from 'react-native';
 import { Colors, FontSize, Radius, Spacing } from '../../../theme';
 
@@ -29,7 +35,7 @@ interface PinEntryModalProps {
   onSubmit: (pin: string) => void;
 }
 
-export function PinEntryModal({
+function PinEntryModalComponent({
   visible,
   title = 'Enter PIN',
   subtitle = 'Use your 4-digit account PIN',
@@ -41,35 +47,83 @@ export function PinEntryModal({
 }: PinEntryModalProps) {
   const [pin, setPin] = useState('');
   const inputRef = useRef<TextInput>(null);
+  // Prevents double-fire if onChangeText delivers 4 digits twice before loading flips.
+  const submittedRef = useRef(false);
+  const onSubmitRef = useRef(onSubmit);
+  onSubmitRef.current = onSubmit;
+
+  const focusPinInput = useCallback(() => {
+    if (locked || isLoading) return;
+    inputRef.current?.focus();
+  }, [locked, isLoading]);
 
   useEffect(() => {
-    if (visible) {
+    if (!visible) {
       setPin('');
-      if (!locked) {
-        setTimeout(() => inputRef.current?.focus(), 200);
-      }
+      submittedRef.current = false;
+      return undefined;
     }
-  }, [visible, locked]);
 
-  // Clear digits after a failed attempt so the next guess is intentional.
+    // Same-window TextInput: focus after layout so the IME actually opens.
+    const t = setTimeout(() => {
+      focusPinInput();
+    }, Platform.OS === 'android' ? 30 : 0);
+    return () => clearTimeout(t);
+  }, [visible, locked, focusPinInput]);
+
   useEffect(() => {
-    if (error) setPin('');
-  }, [error]);
+    if (!visible) return undefined;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (!isLoading) onCancel();
+      return true;
+    });
+    return () => sub.remove();
+  }, [visible, isLoading, onCancel]);
 
-  const handleChange = (value: string) => {
+  useEffect(() => {
+    if (!error) return undefined;
+    setPin('');
+    submittedRef.current = false;
+    const t = setTimeout(focusPinInput, 40);
+    return () => clearTimeout(t);
+  }, [error, focusPinInput]);
+
+  const handleChange = useCallback((value: string) => {
     const digits = value.replace(/\D/g, '').slice(0, 4);
     setPin(digits);
-  };
 
-  const canSubmit = pin.length === 4 && !isLoading && !locked;
+    if (digits.length === 4 && !submittedRef.current) {
+      submittedRef.current = true;
+      Keyboard.dismiss();
+      requestAnimationFrame(() => {
+        onSubmitRef.current(digits);
+      });
+    }
+  }, []);
+
+  if (!visible) return null;
+
+  const canEdit = !isLoading && !locked;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+    <View
+      style={styles.root}
+      collapsable={false}
+      accessibilityViewIsModal
+    >
       <KeyboardAvoidingView
         style={styles.overlay}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <View style={styles.card}>
+        {/* Transparent dim — login screen stays visible behind the PIN card. */}
+        <TouchableOpacity
+          style={styles.backdrop}
+          activeOpacity={1}
+          onPress={isLoading ? undefined : onCancel}
+          accessibilityLabel="Dismiss PIN entry"
+        />
+
+        <View style={styles.card} collapsable={false}>
           <Text style={styles.title}>{title}</Text>
           <Text style={styles.subtitle}>{subtitle}</Text>
 
@@ -81,48 +135,57 @@ export function PinEntryModal({
             keyboardType="number-pad"
             maxLength={4}
             secureTextEntry
-            editable={!isLoading && !locked}
+            editable={canEdit}
             placeholder="••••"
             placeholderTextColor={Colors.text.subtle}
-            onSubmitEditing={() => {
-              if (canSubmit) onSubmit(pin);
-            }}
+            autoFocus={canEdit}
+            showSoftInputOnFocus
+            blurOnSubmit={false}
+            autoComplete="off"
+            textContentType="oneTimeCode"
+            importantForAutofill="no"
+            caretHidden={false}
           />
+
+          {isLoading ? (
+            <ActivityIndicator color={Colors.yellow} style={styles.loading} />
+          ) : null}
 
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
-          <View style={styles.actions}>
-            <TouchableOpacity
-              style={styles.cancelBtn}
-              onPress={onCancel}
-              disabled={isLoading}
-            >
-              <Text style={styles.cancelText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.submitBtn, !canSubmit && styles.submitBtnDisabled]}
-              onPress={() => onSubmit(pin)}
-              disabled={!canSubmit}
-            >
-              {isLoading ? (
-                <ActivityIndicator color={Colors.navy} />
-              ) : (
-                <Text style={styles.submitText}>Continue</Text>
-              )}
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity
+            style={styles.cancelBtn}
+            onPress={onCancel}
+            disabled={isLoading}
+          >
+            <Text style={styles.cancelText}>Cancel</Text>
+          </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
-    </Modal>
+    </View>
   );
 }
 
+export const PinEntryModal = memo(PinEntryModalComponent);
+
 const styles = StyleSheet.create({
+  root: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 9999,
+    elevation: 9999,
+  },
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.55)',
     justifyContent: 'center',
-    padding: Spacing[5],
+    paddingHorizontal: Spacing[5],
+  },
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
   },
   card: {
     backgroundColor: Colors.navy,
@@ -131,12 +194,14 @@ const styles = StyleSheet.create({
     borderColor: Colors.glass.borderStrong,
     padding: Spacing[5],
     gap: Spacing[3],
+    zIndex: 1,
+    elevation: 8,
   },
   title: { fontSize: FontSize.xl, fontWeight: '800', color: Colors.white },
   subtitle: { fontSize: FontSize.sm, color: Colors.text.subtle, lineHeight: 20 },
   input: {
     textAlign: 'center',
-    letterSpacing: 12,
+    letterSpacing: 8,
     fontSize: FontSize['2xl'],
     fontWeight: '700',
     color: Colors.white,
@@ -147,29 +212,20 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing[4],
   },
   inputError: { borderColor: Colors.dangerBorder },
+  loading: { marginTop: Spacing[1] },
   errorText: {
     fontSize: FontSize.sm,
     color: Colors.dangerLight,
     fontWeight: '600',
     lineHeight: 18,
   },
-  actions: { flexDirection: 'row', gap: Spacing[3], marginTop: Spacing[2] },
   cancelBtn: {
-    flex: 1,
     borderWidth: 1.5,
     borderColor: Colors.glass.border,
     borderRadius: Radius.lg,
     paddingVertical: Spacing[3],
     alignItems: 'center',
+    marginTop: Spacing[2],
   },
   cancelText: { color: Colors.white, fontWeight: '600' },
-  submitBtn: {
-    flex: 1,
-    backgroundColor: Colors.yellow,
-    borderRadius: Radius.lg,
-    paddingVertical: Spacing[3],
-    alignItems: 'center',
-  },
-  submitBtnDisabled: { opacity: 0.5 },
-  submitText: { color: Colors.navy, fontWeight: '800' },
 });

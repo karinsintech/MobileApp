@@ -1,6 +1,7 @@
 /**
- * Turns /echallan/paynow paymentUrl into WebView input — web always treats the
- * gateway payload as executable HTML (blob iframe); only pure https links use uri mode.
+ * Turns /echallan/paynow paymentLink (or legacy paymentUrl HTML) into WebView input.
+ * Finii returns a pure https link → uri mode (in-app, no system browser).
+ * Legacy Razorpay markup still uses html mode with checkout.js baseUrl.
  */
 
 import { decodeEscapedPaymentHtml } from './challanApiNormalize';

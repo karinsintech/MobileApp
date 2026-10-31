@@ -14,6 +14,7 @@ import { AppState, Platform } from 'react-native';
 import type { FirebaseMessagingTypes } from '@react-native-firebase/messaging';
 import notifee, {
   AndroidImportance,
+  AndroidStyle,
   EventType,
   AuthorizationStatus,
 } from '@notifee/react-native';
@@ -33,6 +34,7 @@ import {
   loadMessagingModuleForAuthStatus,
 } from './messagingProvider';
 import {
+  cancelFleetTrayNotification,
   consumeFleetTrayOpenIntent,
   displayFleetTrayNotification,
 } from './fleetTrayNotification';
@@ -57,14 +59,17 @@ export const ANDROID_NOTIFICATION_SMALL_ICON = 'ic_stat_notification';
  */
 const ANDROID_NOTIFICATION_SMALL_ICON_FALLBACKS = [
   ANDROID_NOTIFICATION_SMALL_ICON,
+  'ic_notification_large',
   'ic_launcher',
 ] as const;
 /**
- * Full-color K launcher shown as the left tray avatar (Twitter-style).
- * smallIcon is a white K silhouette for the status bar; without largeIcon
- * some OEMs promote that silhouette (the bell) to the whole left slot.
+ * Full-color Karins logo for the left tray avatar (Twitter-style).
+ * Uses a flat drawable — NOT mipmap/ic_launcher — because on API 26+ that
+ * id is an AdaptiveIconDrawable XML and Notifee/OEM shade loaders leave the
+ * left slot blank (or fall back to a tiny white smallIcon silhouette).
+ * smallIcon remains the white K status-bar silhouette.
  */
-const ANDROID_NOTIFICATION_LARGE_ICON = 'ic_launcher';
+const ANDROID_NOTIFICATION_LARGE_ICON = 'ic_notification_large';
 /** Matches android/app/src/main/res/values/colors.xml notification_accent. */
 const ANDROID_NOTIFICATION_COLOR = '#16B7F3';
 let openHandlersRegistered = false;
@@ -75,12 +80,17 @@ let displayQueue: Promise<unknown> = Promise.resolve();
 let resolvedAndroidSmallIcon: string | null = null;
 
 /**
- * Tray body: flatten multi-line detail to one flowing string.
- * iOS wraps it in the banner; Android custom layout wraps the same copy (max 3 lines).
+ * Tray body for the OS shade.
+ * - Android: keep real newlines so the custom RemoteViews layout reads clearly
+ *   like iOS (title + multi-line body, no expand chevron).
+ * - iOS: flatten to a single flowing string; the banner wraps it naturally.
  */
 function formatTrayBody(notification: Pick<FleetNotification, 'body' | 'detail'>): string {
   const fullText = (notification.detail ?? notification.body).trim();
   if (!fullText) return 'Karins Fleet';
+  if (Platform.OS === 'android') {
+    return fullText.replace(/\n{3,}/g, '\n\n').trim();
+  }
   return fullText.replace(/\s*\n+\s*/g, ', ');
 }
 
@@ -114,13 +124,21 @@ function buildAndroidDisplayOptions(
     channelId: ANDROID_CHANNEL_ID,
     pressAction: { id: 'default' as const },
     smallIcon: options?.smallIcon ?? resolvedAndroidSmallIcon ?? ANDROID_NOTIFICATION_SMALL_ICON,
-    // K silhouette in the status bar; full-color K launcher in the shade tray.
+    // Flat centered-K drawable — never mipmap adaptive icon (blank left avatar on API 26+).
     largeIcon: ANDROID_NOTIFICATION_LARGE_ICON,
     circularLargeIcon: true,
     color: ANDROID_NOTIFICATION_COLOR,
     importance: AndroidImportance.HIGH,
     sound: 'default',
     onlyAlertOnce: options?.onlyAlertOnce ?? false,
+  };
+}
+
+/** Notifee fallback body style — expands multi-line text when native tray module is unavailable. */
+function buildAndroidBigTextStyle(body: string) {
+  return {
+    type: AndroidStyle.BIGTEXT as const,
+    text: body,
   };
 }
 
@@ -149,6 +167,9 @@ async function displayWithSafeAndroidIcon(
   const iconCandidates = resolvedAndroidSmallIcon
     ? [resolvedAndroidSmallIcon]
     : [...ANDROID_NOTIFICATION_SMALL_ICON_FALLBACKS];
+  // Fallback path only — native module already paints multi-line RemoteViews.
+  const bodyText = typeof payload.body === 'string' ? payload.body : '';
+  const bigTextStyle = bodyText ? buildAndroidBigTextStyle(bodyText) : undefined;
 
   let lastError: unknown;
   for (const smallIcon of iconCandidates) {
@@ -156,11 +177,14 @@ async function displayWithSafeAndroidIcon(
       await enqueueNotifeeDisplay(() =>
         notifee.displayNotification({
           ...payload,
-          android: buildAndroidDisplayOptions({
-            onlyAlertOnce: options?.onlyAlertOnce,
-            imageUrl: options?.imageUrl,
-            smallIcon,
-          }),
+          android: {
+            ...buildAndroidDisplayOptions({
+              onlyAlertOnce: options?.onlyAlertOnce,
+              imageUrl: options?.imageUrl,
+              smallIcon,
+            }),
+            ...(bigTextStyle ? { style: bigTextStyle } : {}),
+          },
         }),
       );
       resolvedAndroidSmallIcon = smallIcon;
@@ -176,12 +200,15 @@ async function displayWithSafeAndroidIcon(
     await enqueueNotifeeDisplay(() =>
       notifee.displayNotification({
         ...payload,
-        android: buildAndroidDisplayOptions({
-          onlyAlertOnce: options?.onlyAlertOnce,
-          imageUrl: options?.imageUrl,
-          // Force default path — empty name makes Notifee skip a bad drawable.
-          smallIcon: 'ic_launcher',
-        }),
+        android: {
+          ...buildAndroidDisplayOptions({
+            onlyAlertOnce: options?.onlyAlertOnce,
+            imageUrl: options?.imageUrl,
+            // Last known-good flat asset — avoid adaptive mipmap/ic_launcher.
+            smallIcon: ANDROID_NOTIFICATION_LARGE_ICON,
+          }),
+          ...(bigTextStyle ? { style: bigTextStyle } : {}),
+        },
       }),
     );
   } catch {
@@ -295,6 +322,17 @@ export const pushService = {
     return canShowLocalNotifications();
   },
 
+  /** Remove a shade row (native Android custom tray + Notifee fallback). */
+  async cancelTrayNotification(id: string): Promise<void> {
+    if (!id) return;
+    await cancelFleetTrayNotification(id);
+    try {
+      await notifee.cancelNotification(id);
+    } catch {
+      /* best-effort */
+    }
+  },
+
   /** Show a fleet alert in the system tray (dashboard-derived or local). */
   async displayLocalNotification(
     notification: FleetNotification,
@@ -311,15 +349,21 @@ export const pushService = {
 
       // Full detail in body — iOS wraps it; Android custom layout shows it without expand.
       const trayBody = formatTrayBody(notification);
+      // Short single-line summary for OEM heads-up fallbacks that ignore RemoteViews.
+      const traySummary = (notification.body || trayBody.split('\n')[0] || '').trim();
       const imageUrl = resolveNotificationImageUrl(
         notification.image ?? notification.data?.image,
       );
-      const dataPayload = toNotifeeData({
-        category: notification.category,
-        createdAt: notification.createdAt,
-        ...(notification.data ?? {}),
-        ...(imageUrl ? { image: imageUrl } : {}),
-      });
+      const dataPayload = {
+        ...toNotifeeData({
+          category: notification.category,
+          createdAt: notification.createdAt,
+          ...(notification.data ?? {}),
+          ...(imageUrl ? { image: imageUrl } : {}),
+        }),
+        // Not allow-listed for inbox storage — attached only for native tray chrome.
+        ...(Platform.OS === 'android' && traySummary ? { traySummary } : {}),
+      };
 
       if (Platform.OS === 'android') {
         const shown = await displayFleetTrayNotification({
@@ -328,6 +372,7 @@ export const pushService = {
           body: trayBody,
           channelId: ANDROID_CHANNEL_ID,
           data: dataPayload,
+          onlyAlertOnce: options?.onlyAlertOnce ?? false,
         });
         if (shown) return true;
       }
@@ -464,13 +509,17 @@ export const pushService = {
       await pushService.ensureAndroidChannel();
 
       const trayBody = formatTrayBody(mapped);
+      const traySummary = (mapped.body || trayBody.split('\n')[0] || '').trim();
       const imageUrl = resolveNotificationImageUrl(mapped.image ?? mapped.data?.image);
-      const dataPayload = toNotifeeData({
-        ...(mapped.data ?? {}),
-        category: mapped.category,
-        createdAt: mapped.createdAt,
-        ...(imageUrl ? { image: imageUrl } : {}),
-      });
+      const dataPayload = {
+        ...toNotifeeData({
+          ...(mapped.data ?? {}),
+          category: mapped.category,
+          createdAt: mapped.createdAt,
+          ...(imageUrl ? { image: imageUrl } : {}),
+        }),
+        ...(Platform.OS === 'android' && traySummary ? { traySummary } : {}),
+      };
 
       if (Platform.OS === 'android') {
         const shown = await displayFleetTrayNotification({
@@ -479,6 +528,7 @@ export const pushService = {
           body: trayBody,
           channelId: ANDROID_CHANNEL_ID,
           data: dataPayload,
+          onlyAlertOnce: false,
         });
         if (shown) return;
       }

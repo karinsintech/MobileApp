@@ -29,11 +29,98 @@ export interface HealthScore {
 export function normalizeDashboardSummary(raw: DashboardSummary): DashboardSummary {
   const tollSpend = normalizeTollSpendFromSummary(raw);
   const wallet = normalizeWalletInfo(raw.wallet);
+  const savings = normalizeSavingsInfo(raw.savings);
+  const claims = normalizeClaimsSummary(raw.claims, savings);
 
   return {
     ...raw,
     tollSpend,
     wallet,
+    savings,
+    claims,
+  };
+}
+
+/** Read a FY period amount from scalar or `{ thisYear, lastYear }` / snake_case. */
+export function readFyPeriodAmount(
+  value: unknown,
+  period: 'thisYear' | 'lastYear',
+): number {
+  if (value == null || value === '') return 0;
+  if (typeof value === 'number') {
+    return period === 'thisYear' && Number.isFinite(value) ? Math.trunc(value) : 0;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(String(value).replace(/,/g, '').trim());
+    return period === 'thisYear' && Number.isFinite(parsed) ? Math.trunc(parsed) : 0;
+  }
+  if (typeof value === 'object') {
+    const row = value as Record<string, unknown>;
+    const raw = period === 'thisYear'
+      ? (row.thisYear ?? row.this_year ?? row.currentYear ?? row.current_year)
+      : (row.lastYear ?? row.last_year ?? row.previousYear ?? row.previous_year);
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? Math.trunc(parsed) : 0;
+  }
+  return 0;
+}
+
+function normalizeSavingsInfo(savings?: SavingsInfo | null): SavingsInfo {
+  const legacy = (savings ?? {}) as SavingsInfo & Record<string, unknown>;
+  const recoveredRaw = legacy.fyClaimsRecovered ?? legacy.fy_claims_recovered;
+  const incentiveRaw = legacy.fyIncentivePaid ?? legacy.fy_incentive_paid;
+  const totalRaw = legacy.fyTotalSavings ?? legacy.fy_total_savings;
+
+  const thisRecovered = readFyPeriodAmount(recoveredRaw, 'thisYear');
+  const lastRecovered = readFyPeriodAmount(recoveredRaw, 'lastYear');
+  const thisIncentive = readFyPeriodAmount(incentiveRaw, 'thisYear');
+  const lastIncentive = readFyPeriodAmount(incentiveRaw, 'lastYear');
+  const explicitTotal = typeof totalRaw === 'number' || typeof totalRaw === 'string'
+    ? parseWalletAmount(totalRaw)
+    : 0;
+
+  return {
+    fyClaimsRecovered: {
+      thisYear: thisRecovered,
+      lastYear: lastRecovered,
+    },
+    fyIncentivePaid: {
+      thisYear: thisIncentive,
+      lastYear: lastIncentive,
+    },
+    // Prefer explicit total; otherwise reconstruct so splash/dashboard never see a blank FY.
+    fyTotalSavings: explicitTotal > 0 ? explicitTotal : thisRecovered + thisIncentive,
+    hasIncentiveReport: legacy.hasIncentiveReport === true || thisIncentive > 0 || lastIncentive > 0,
+  };
+}
+
+function normalizeClaimsSummary(
+  claims: DashboardSummary['claims'] | undefined,
+  savings: SavingsInfo,
+): DashboardSummary['claims'] {
+  const recoveredFromSavings = readFyPeriodAmount(savings.fyClaimsRecovered, 'thisYear');
+  const recoveredLastFromSavings = readFyPeriodAmount(savings.fyClaimsRecovered, 'lastYear');
+  if (!claims) {
+    return {
+      approved: 0,
+      pending: 0,
+      waitingForDoc: 0,
+      rejected: 0,
+      expired: 0,
+      recoveredFY: recoveredFromSavings,
+      recoveredLastFY: recoveredLastFromSavings,
+      total: 0,
+    };
+  }
+  const legacy = claims as DashboardSummary['claims'] & Record<string, unknown>;
+  return {
+    ...claims,
+    recoveredFY: parseWalletAmount(
+      claims.recoveredFY ?? legacy.recovered_fy ?? recoveredFromSavings,
+    ) || recoveredFromSavings,
+    recoveredLastFY: parseWalletAmount(
+      claims.recoveredLastFY ?? legacy.recovered_last_fy ?? recoveredLastFromSavings,
+    ) || recoveredLastFromSavings,
   };
 }
 
@@ -212,23 +299,13 @@ function resolveFyClaimsRecovered(
   savings?: SavingsInfo | null,
   claims?: ClaimsSummary | null,
 ): number {
-  const recovered = savings?.fyClaimsRecovered;
-
-  if (recovered != null && typeof recovered === 'object') {
-    return Number((recovered as { thisYear?: number }).thisYear) || 0;
-  }
-
-  return Number(recovered) || Number(claims?.recoveredFY) || 0;
+  const fromSavings = readFyPeriodAmount(savings?.fyClaimsRecovered, 'thisYear');
+  if (fromSavings > 0) return fromSavings;
+  return parseWalletAmount(claims?.recoveredFY);
 }
 
 function resolveFyIncentivePaid(savings?: SavingsInfo | null): number {
-  const incentive = savings?.fyIncentivePaid;
-
-  if (incentive != null && typeof incentive === 'object') {
-    return Number((incentive as { thisYear?: number }).thisYear) || 0;
-  }
-
-  return Number(incentive) || 0;
+  return readFyPeriodAmount(savings?.fyIncentivePaid, 'thisYear');
 }
 
 /**

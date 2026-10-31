@@ -16,6 +16,7 @@ import {
   CLAIM_FILTER_OPTS,
   computeClaimFilterCounts,
   claimsSummaryToFilterCounts,
+  matchesClaimFilter,
   type ClaimFilter,
 } from '../claimStatus';
 import { mapClaimListRow } from '../mapClaimRow';
@@ -33,11 +34,6 @@ type Filter = ClaimFilter;
 type ClaimListItem = ClaimRecord;
 
 const PAGE_SIZE = 25;
-
-function formatBadgeCount(count: number): string {
-  if (count > 99) return '99+';
-  return String(count);
-}
 
 function buildInitialFilters(routeParams: ClaimsStackParamList['ClaimsList']): ClaimFilters {
   const base = getDefaultClaimFilters();
@@ -78,7 +74,15 @@ export default function ClaimsScreen() {
   const [refreshing, setRefresh] = useState(false);
 
   const fetchingRef = useRef(0);
+  const claimsCountRef = useRef(0);
+  // Avoid re-creating fetchData (and refetching ALL) when only the pending badge updates.
+  const pendingSummaryRef = useRef(summaryCounts.PENDING);
+  pendingSummaryRef.current = summaryCounts.PENDING;
   const filtersActive = isClaimFiltersActive(appliedFilters);
+
+  useEffect(() => {
+    claimsCountRef.current = claims.length;
+  }, [claims.length]);
 
   const fetchData = useCallback(async (pg = 1, isRefresh = false) => {
     // Sequence requests so a filter/chip change is never dropped while an older
@@ -87,6 +91,63 @@ export default function ClaimsScreen() {
     if (pg === 1) { isRefresh ? setRefresh(true) : setLoading(true); }
     else setLoadingMore(true);
     try {
+      // PENDING is not a /debit/getList claimStatus — scan unfiltered pages and
+      // keep rows this app already classifies as statusGroup === 'PENDING'.
+      if (filter === 'PENDING') {
+        let sourcePage = pg;
+        let accumulated: ClaimListItem[] = [];
+        let apiTotal = 0;
+        let exhausted = false;
+        // First open: fill a screen of pending rows. Load-more: find at least one more.
+        const targetCount = pg === 1 ? PAGE_SIZE : 1;
+        const pendingSummary = pendingSummaryRef.current;
+
+        while (reqId === fetchingRef.current) {
+          const query = buildClaimQueryParams(
+            appliedFilters,
+            sourcePage,
+            PAGE_SIZE,
+            customerId,
+            'ALL',
+          );
+          const { data } = await claimsApi.getList(query);
+          if (reqId !== fetchingRef.current) return;
+
+          const rows = data.rows ?? [];
+          apiTotal = data.count ?? 0;
+          const pendingPage = rows
+            .map(mapClaimListRow)
+            .filter((claim) =>
+              matchesClaimFilter(claim.rawClaimStatus ?? '', claim.statusGroup, 'PENDING'),
+            );
+          accumulated = [...accumulated, ...pendingPage];
+
+          exhausted =
+            rows.length === 0
+            || rows.length < PAGE_SIZE
+            || sourcePage * PAGE_SIZE >= apiTotal;
+          if (exhausted) break;
+          if (accumulated.length >= targetCount) break;
+          if (pendingSummary > 0 && accumulated.length >= pendingSummary) break;
+          sourcePage += 1;
+        }
+
+        if (reqId !== fetchingRef.current) return;
+
+        const nextLength = pg === 1
+          ? accumulated.length
+          : claimsCountRef.current + accumulated.length;
+        if (pg === 1) setClaims(accumulated);
+        else setClaims((prev) => [...prev, ...accumulated]);
+
+        if (pendingSummary > 0) setTotal(pendingSummary);
+        else if (exhausted) setTotal(nextLength);
+        else setTotal(Math.max(apiTotal, nextLength + 1));
+
+        setPage(sourcePage);
+        return;
+      }
+
       const query = buildClaimQueryParams(
         appliedFilters,
         pg,
@@ -161,6 +222,13 @@ export default function ClaimsScreen() {
     fetchData(1);
     fetchSummaryCounts();
   }, [fetchData, fetchSummaryCounts]);
+
+  // When dashboard pending arrives after the first PENDING scan, align list total.
+  useEffect(() => {
+    if (filter === 'PENDING' && summaryCounts.PENDING > 0) {
+      setTotal(summaryCounts.PENDING);
+    }
+  }, [filter, summaryCounts.PENDING]);
 
   const filterCounts = useMemo(() => {
     // Prefer list totals for ALL so badges match the date/customer-scoped ledger.
@@ -275,7 +343,7 @@ export default function ClaimsScreen() {
                 </Text>
                 {showBadge ? (
                   <View style={styles.chipBadge}>
-                    <Text style={styles.chipBadgeText}>{formatBadgeCount(count)}</Text>
+                    <Text style={styles.chipBadgeText}>{count}</Text>
                   </View>
                 ) : null}
               </TouchableOpacity>

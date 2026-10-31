@@ -7,7 +7,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, ActivityIndicator, Alert, Modal,
+  TextInput, ActivityIndicator, Alert, Modal, Platform,
 } from 'react-native';
 import { GlassCard } from '../../../components';
 import { Colors, FontSize, Spacing, Radius } from '../../../theme';
@@ -273,18 +273,24 @@ export default function WalletRechargeTab({
               && (isAmountValid ? styles.amountInputRowValid : styles.amountInputRowInvalid),
           ]}
         >
+          {/*
+            Keep ₹ as its own label (not inside TextInput) so typed amounts stay
+            prefixed. Wrap the field so iOS UITextField cannot paint under ₹.
+          */}
           <Text style={styles.rupee}>₹</Text>
-          <TextInput
-            style={styles.amountInput}
-            keyboardType="number-pad"
-            value={amount}
-            onChangeText={(text) => {
-              setAmount(text.replace(/[^0-9]/g, ''));
-              setSelectedAmount(null);
-            }}
-            placeholder="Enter amount"
-            placeholderTextColor={Colors.text.subtle}
-          />
+          <View style={styles.amountInputWrap}>
+            <TextInput
+              style={styles.amountInput}
+              keyboardType="number-pad"
+              value={amount}
+              onChangeText={(text) => {
+                setAmount(text.replace(/[^0-9]/g, ''));
+                setSelectedAmount(null);
+              }}
+              placeholder="Enter amount"
+              placeholderTextColor={Colors.text.subtle}
+            />
+          </View>
           {amount.trim() !== '' ? (
             <Text style={[styles.amountHint, isAmountValid ? styles.amountValid : styles.amountInvalid]}>
               {isAmountValid ? '✓' : '✕'}
@@ -424,24 +430,41 @@ const styles = StyleSheet.create({
   },
   detailRow: { fontSize: FontSize.sm, color: Colors.white },
   detailLabel: { fontWeight: '700', color: Colors.text.secondary },
-  amountCard: { paddingVertical: Spacing[4] },
+  amountCard: { paddingVertical: Spacing[4], paddingHorizontal: Spacing[4] },
   amountInputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
     marginBottom: Spacing[4],
     borderWidth: 1,
     borderColor: Colors.glass.border,
     borderRadius: Radius.md,
     backgroundColor: Colors.glass.bg,
     paddingHorizontal: Spacing[3],
-    paddingVertical: Spacing[2],
+    // iOS needs a bit more vertical room so large placeholder glyphs are not clipped.
+    paddingVertical: Platform.OS === 'ios' ? Spacing[3] : Spacing[2],
   },
   amountInputRowValid: { borderColor: Colors.successBorder },
   amountInputRowInvalid: { borderColor: Colors.dangerBorder },
-  rupee: { fontSize: 28, fontWeight: '700', color: Colors.text.subtle },
-  amountInput: { flex: 1, fontSize: 30, fontWeight: '800', color: Colors.white, padding: 0 },
-  amountHint: { fontSize: FontSize.lg, fontWeight: '800' },
+  rupee: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: Colors.text.subtle,
+    // Explicit gap — flex `gap` alone still lets iOS TextInput draw over the prefix.
+    marginRight: 8,
+    lineHeight: 28,
+  },
+  // flex:1 lives on the wrap, not TextInput — prevents iOS overlay on the ₹ label.
+  amountInputWrap: { flex: 1, minWidth: 0 },
+  amountInput: {
+    width: '100%',
+    fontSize: 22,
+    fontWeight: '700',
+    color: Colors.white,
+    padding: 0,
+    margin: 0,
+    ...(Platform.OS === 'ios' ? { paddingVertical: 4, lineHeight: 28 } : {}),
+  },
+  amountHint: { fontSize: FontSize.lg, fontWeight: '800', marginLeft: 6 },
   amountValid: { color: Colors.successLight },
   amountInvalid: { color: Colors.dangerLight },
   quickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },

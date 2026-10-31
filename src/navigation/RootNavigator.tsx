@@ -2,16 +2,15 @@
  * Root navigation — chooses between auth flow and main app after bootstrap.
  * Post-login splash is full-screen (reliable on APK); main shell loads after it.
  *
- * After splash, a device app-lock PIN is required before MainTabs. Fresh install,
- * reinstall (local storage wiped), or PIN removed all land on mandatory Set PIN;
- * subsequent logins on the same install skip it when the hash is already present.
+ * App-lock PIN is optional (Profile → Security). Quick re-entry uses Fingerprint /
+ * Face ID on the Login screen when biometric login is enabled — no mandatory set-PIN gate.
  *
  * Navigators must be imported eagerly. React.lazy splits MainTabs into a second
  * Metro bundle, which can load a second React copy and crash with
  * "Invalid hook call" inside FrameSizeProvider / native-stack.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { useAppDispatch, useAppSelector } from '../store';
@@ -28,11 +27,6 @@ import {
   flushPendingNotificationNavigation,
   navigationRef,
 } from '../services/notifications/notificationNavigation';
-import {
-  hasAppLockPin,
-  subscribeAppLockPinChange,
-} from '../services/auth/appLockPinService';
-import { SetAppLockPinForm } from '../features/profile/screens/SetAppLockPinScreen';
 import MainTabs from './MainTabs';
 
 export function RootNavigator() {
@@ -44,29 +38,14 @@ export function RootNavigator() {
     user,
   } = useAppSelector((state) => state.auth);
 
-  // Local MMKV hash — wiped on uninstall/reinstall; survives normal logout.
-  // Default false until MMKV is ready; App.tsx gates mount after initEncryptedMmkv.
-  const [appLockPinReady, setAppLockPinReady] = useState(false);
-
   const canRegisterPush = isAuthenticated && !isBootstrapping;
   // Defer push registration until the main shell is mounted — Notifee permission
   // needs PermissionAwareActivity and fails during post-login splash on OEM phones.
-  // Also wait until app-lock PIN exists so push is not registered on the set-PIN gate.
-  const needsAppLockSetup = isAuthenticated && !appLockPinReady;
-  const sessionReady =
-    canRegisterPush && !showPostLoginSplash && !needsAppLockSetup;
+  const sessionReady = canRegisterPush && !showPostLoginSplash;
 
   usePushNotifications(sessionReady);
 
   const showPostLoginSplashScreen = isAuthenticated && showPostLoginSplash;
-
-  // Re-sync when auth flips (login / restore) and whenever PIN is set or cleared.
-  useEffect(() => {
-    setAppLockPinReady(hasAppLockPin());
-    return subscribeAppLockPinChange(() => {
-      setAppLockPinReady(hasAppLockPin());
-    });
-  }, [isAuthenticated]);
 
   useEffect(() => {
     if (!sessionReady) return;
@@ -99,23 +78,14 @@ export function RootNavigator() {
     );
   }
 
-  // Install / reinstall / no PIN yet — block the shell until a device app-lock PIN exists.
-  // Must sit inside NavigationContainer: ScreenHeader calls useNavigation even with showBack=false.
-  if (needsAppLockSetup) {
-    return (
-      <NavigationContainer>
-        <SetAppLockPinForm mandatory />
-      </NavigationContainer>
-    );
-  }
-
   const navKey = isAuthenticated ? 'app-main' : 'auth';
 
   return (
     <NavigationContainer
       key={navKey}
       ref={navigationRef}
-      linking={sessionReady ? linking : undefined}
+      // Root container hosts AuthStack | MainTabs; deep links target Main tabs only.
+      linking={sessionReady ? (linking as never) : undefined}
       onReady={() => {
         // Cold-start tray tap may have queued before the navigator mounted.
         if (sessionReady) flushPendingNotificationNavigation();

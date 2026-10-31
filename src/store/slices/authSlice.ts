@@ -16,7 +16,21 @@ import {
 } from '../../types/auth';
 import { switchActiveCustomer } from '../../services/auth/customerSwitch';
 import { ensureDeviceIdPersisted, resolveLogoutDeviceId } from '../../services/auth/deviceIdentity';
-import { signInWithPinLogin, syncPinLoginPreference, enablePinLogin } from '../../services/auth/pinAuthService';
+import {
+  signInWithPinLogin,
+  syncPinLoginPreference,
+  enablePinLogin,
+  rememberPinLoginMobile,
+  clearPinLoginMobileMemory,
+  disablePinLogin,
+} from '../../services/auth/pinAuthService';
+import {
+  authenticateBiometricLogin,
+  enableBiometricLoginAfterSignIn,
+  isBiometricLoginEnabled,
+  lockSessionForBiometricLogin,
+  disableBiometricLogin,
+} from '../../services/auth/biometricLoginService';
 import { getCachedOrFreshGeoCoords, getClientGeoCoords } from '../../utils/getClientGeoCoords';
 
 /** Same wording as a bad-credentials failure so restricted roles are not tipped off. */
@@ -26,6 +40,8 @@ type SessionUser = Omit<AuthUser, 'accessToken'>;
 
 interface SignInResult {
   user: SessionUser;
+  /** False for biometric unlock — user already saw the splash on the original login. */
+  showPostLoginSplash?: boolean;
 }
 
 interface AuthState {
@@ -96,6 +112,7 @@ async function persistSession(
   } catch {
     // ignore
   }
+  SecureStorage.setBiometricSessionLocked(false);
 }
 
 export const signIn = createAsyncThunk<
@@ -146,10 +163,13 @@ export const signIn = createAsyncThunk<
       );
     }
 
-    SecureStorage.setLastLoginMobile(payload.username.trim());
+    // Seed process memory so "Sign in with PIN" can open a PIN-only popup later.
+    rememberPinLoginMobile(payload.username.trim());
 
     // PIN preference sync is off the critical path — do not delay Sign In success.
     void syncPinLoginPreference(payload.username.trim()).catch(() => {});
+    // Offer Fingerprint / Face ID on next Login when the device has biometrics.
+    void enableBiometricLoginAfterSignIn().catch(() => {});
 
     return { user: sessionUser };
   } catch (error: unknown) {
@@ -193,8 +213,8 @@ export const signInWithPin = createAsyncThunk<
       sessionUser,
       resolvedMobile,
     );
-    SecureStorage.setLastLoginMobile(resolvedMobile);
     enablePinLogin(resolvedMobile);
+    void enableBiometricLoginAfterSignIn().catch(() => {});
 
     return { user: sessionUser };
   } catch (error: unknown) {
@@ -208,6 +228,54 @@ export const signInWithPin = createAsyncThunk<
   }
 });
 
+/**
+ * Fingerprint / Face ID login — no mobile number.
+ * Unlocks the soft-locked Keychain session after OS biometrics succeed.
+ */
+export const signInWithBiometric = createAsyncThunk<
+  SignInResult,
+  void,
+  { rejectValue: string }
+>('auth/signInWithBiometric', async (_, { rejectWithValue }) => {
+  try {
+    const authResult = await authenticateBiometricLogin();
+    if (authResult.status === 'error') {
+      return rejectWithValue(authResult.message);
+    }
+
+    const token = await SecureStorage.getAccessToken();
+    const user = SecureStorage.getSessionUser<SessionUser>();
+    if (!token || !user) {
+      SecureStorage.setBiometricSessionLocked(true);
+      return rejectWithValue(
+        'Saved session expired. Sign in with password or PIN.',
+      );
+    }
+
+    if (isMobileAppLoginBlocked(user.roleKey)) {
+      disableBiometricLogin();
+      await SecureStorage.prepareForSignIn();
+      invalidateApiSession();
+      return rejectWithValue(MOBILE_LOGIN_BLOCKED_MESSAGE);
+    }
+
+    SecureStorage.setSessionRestorable(true);
+    markApiSessionActive();
+    void import('../../utils/getClientGeoCoords').then(({ warmClientGeoCoords }) => {
+      warmClientGeoCoords();
+    });
+
+    return { user, showPostLoginSplash: false };
+  } catch (error: unknown) {
+    SecureStorage.setBiometricSessionLocked(true);
+    SecureStorage.clearMemoryAccessToken();
+    invalidateApiSession();
+    return rejectWithValue(
+      getApiErrorMessage(error, 'Biometric sign-in failed. Try password or PIN.'),
+    );
+  }
+});
+
 // Rehydrate auth on app launch — only when the user explicitly signed in and did
 // not log out (can_restore_session gate). Token or user alone is never enough.
 export const restoreSession = createAsyncThunk<
@@ -215,9 +283,32 @@ export const restoreSession = createAsyncThunk<
 >(
   'auth/restoreSession',
   async () => {
-    const token = await SecureStorage.getAccessToken();
     const user = SecureStorage.getSessionUser<SessionUser>();
     const canRestore = SecureStorage.isSessionRestorable();
+
+    // Soft-locked / biometric quick-login: keep Keychain session but do not auto-enter.
+    // Login offers password, PIN, and Fingerprint (when hardware is available).
+    if (
+      canRestore
+      && (SecureStorage.isBiometricSessionLocked() || isBiometricLoginEnabled())
+    ) {
+      const peek = await SecureStorage.peekAccessTokenIgnoringBiometricLock();
+      if (peek && user) {
+        if (isMobileAppLoginBlocked(user.roleKey)) {
+          SecureStorage.setSessionRestorable(false);
+          await SecureStorage.removeAccessToken();
+          SecureStorage.clearSessionUser();
+          disableBiometricLogin();
+          invalidateApiSession();
+          return null;
+        }
+        lockSessionForBiometricLogin();
+        invalidateApiSession();
+        return null;
+      }
+    }
+
+    const token = await SecureStorage.getAccessToken();
 
     if (!canRestore) {
       if (token) await SecureStorage.removeAccessToken();
@@ -288,10 +379,64 @@ export type SignOutOptions = {
   forgetDevice?: boolean;
 };
 
+/**
+ * 30-minute idle timeout — soft-lock to Login without revoking the server session.
+ * Does not change Profile Fingerprint / PIN toggles — Login respects those settings.
+ */
+export const signOutIdle = createAsyncThunk<void>(
+  'auth/signOutIdle',
+  async () => {
+    const peek = await SecureStorage.peekAccessTokenIgnoringBiometricLock();
+    const sessionUser = SecureStorage.getSessionUser<SessionUser>();
+
+    if (peek && sessionUser) {
+      lockSessionForBiometricLogin();
+      invalidateApiSession();
+      try {
+        const { clearSessionLeftAt } = await import('../../services/session/sessionPrivacy');
+        clearSessionLeftAt();
+      } catch {
+        // ignore
+      }
+      return;
+    }
+
+    // No persisted session to soft-lock — fall through to a normal local clear.
+    invalidateApiSession();
+    await SecureStorage.clearAll({ forgetDevice: false });
+    try {
+      const { clearSessionLeftAt } = await import('../../services/session/sessionPrivacy');
+      clearSessionLeftAt();
+    } catch {
+      // ignore
+    }
+  },
+);
+
 export const signOut = createAsyncThunk<void, SignOutOptions | undefined>(
   'auth/signOut',
   async (options) => {
     const forgetDevice = options?.forgetDevice === true;
+
+    // Soft lock: Fingerprint can reopen without mobile/PIN. Skip server revoke so
+    // the Keychain JWT stays valid. Forget This Device still does a full wipe.
+    if (!forgetDevice && isBiometricLoginEnabled()) {
+      const peek = await SecureStorage.peekAccessTokenIgnoringBiometricLock();
+      const sessionUser = SecureStorage.getSessionUser<SessionUser>();
+      if (peek && sessionUser) {
+        lockSessionForBiometricLogin();
+        invalidateApiSession();
+        return;
+      }
+    }
+
+    if (forgetDevice) {
+      disableBiometricLogin();
+      // Drop PIN identity + in-memory mobile so the next user cannot PIN-login.
+      disablePinLogin();
+      clearPinLoginMobileMemory();
+    }
+
     const deviceId = await resolveLogoutDeviceId();
 
     // Capture logout coords while Bearer is still valid — prefer login warm/MMKV
@@ -391,7 +536,8 @@ const authSlice = createSlice({
       state.isLoading = false;
       state.isAuthenticated = true;
       state.isBootstrapping = false;
-      state.showPostLoginSplash = true;
+      // Biometric unlock re-enters an existing session — skip the emotional splash.
+      state.showPostLoginSplash = action.payload.showPostLoginSplash !== false;
       state.user = action.payload.user;
       if (
         isCustomerGroupAdmin(action.payload.user.roleKey) &&
@@ -429,6 +575,23 @@ const authSlice = createSlice({
         state.isLoading = false;
         state.error = action.payload ?? 'PIN sign-in failed.';
       })
+      .addCase(signInWithBiometric.pending, (state) => {
+        state.isLoading = true;
+        state.error = null;
+        state.showPostLoginSplash = false;
+      })
+      .addCase(signInWithBiometric.fulfilled, (state, action) => {
+        handleSignInFulfilled(state, action);
+        // Soft lock clears Redux context but leaves MMKV — rehydrate for the same customer scope.
+        const cachedContext = Cache.getJSON<DashboardContext>('dashboard_context');
+        if (cachedContext) {
+          state.dashboardContext = cachedContext;
+        }
+      })
+      .addCase(signInWithBiometric.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload ?? 'Biometric sign-in failed.';
+      })
       .addCase(signOut.fulfilled, (state) => {
         state.isAuthenticated = false;
         state.isLoading = false;
@@ -441,6 +604,24 @@ const authSlice = createSlice({
       // Even if revoke somehow rejects, local clearAll has run — treat the user
       // as fully signed out so the UI can never get stuck in the app shell.
       .addCase(signOut.rejected, (state) => {
+        state.isAuthenticated = false;
+        state.isLoading = false;
+        state.isBootstrapping = false;
+        state.showPostLoginSplash = false;
+        state.error = null;
+        state.user = null;
+        state.dashboardContext = null;
+      })
+      .addCase(signOutIdle.fulfilled, (state) => {
+        state.isAuthenticated = false;
+        state.isLoading = false;
+        state.isBootstrapping = false;
+        state.showPostLoginSplash = false;
+        state.error = null;
+        state.user = null;
+        state.dashboardContext = null;
+      })
+      .addCase(signOutIdle.rejected, (state) => {
         state.isAuthenticated = false;
         state.isLoading = false;
         state.isBootstrapping = false;

@@ -1,9 +1,22 @@
+/**
+ * Karins Fleet — post-login emotional splash (shown once after sign-in).
+ *
+ * Story grows top → bottom: each beat mounts below the last, fades in, and
+ * STAYS. Nothing is replaced or scrolled away — that "one comes / one goes"
+ * feel was caused by auto-scroll + reserved empty space for hidden beats.
+ */
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, Animated, Easing, StyleSheet, Pressable, ScrollView,
-  AccessibilityInfo, InteractionManager, Platform,
-  type StyleProp, type ViewStyle,
+  AccessibilityInfo, InteractionManager, Platform, LayoutAnimation, UIManager,
+  type StyleProp, type TextStyle, type ViewStyle,
 } from 'react-native';
+
+// Android needs an explicit opt-in before LayoutAnimation can ease height growth.
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SystemBars } from 'react-native-edge-to-edge';
 import LinearGradient from 'react-native-linear-gradient';
@@ -13,7 +26,15 @@ import { useAppDispatch, useAppSelector } from '../../store';
 import { setDashboardContext } from '../../store/slices/authSlice';
 import { dashboardApi } from '../../services/api/dashboardApi';
 import { Cache } from '../../services/storage/SecureStorage';
-import { normalizeDashboardSummary } from '../dashboard/utils/dashboardSummaryUtils';
+import {
+  normalizeDashboardSummary,
+  readFyPeriodAmount,
+  resolveFySavingsDisplayTotal,
+} from '../dashboard/utils/dashboardSummaryUtils';
+import {
+  buildFySavingsFromSummary,
+  hasIncentiveProgramFromSummary,
+} from '../dashboard/utils/fySavingsUtils';
 import { resolveYesterdayVehicleCount } from '../dashboard/utils/fleetUtilizationUtils';
 import {
   filterAssociatedCustomers,
@@ -38,131 +59,47 @@ interface CustomersCacheEntry {
   fetchedAt: number;
 }
 
-/**
- * Karins Fleet — post-login "emotional" splash (deployment design).
- * Shown once after a successful sign-in, before the main app shell loads.
- *
- * Narrative (~7.5s, auto-continues to home):
- *   greeting → guardian strip → overnight activity → loss-prevented tally
- *   → emotional payoff → Karins brand → auto-advance / tap to skip.
- *
- * Pure RN Animated + react-native-svg. Respects Reduce Motion.
- */
-
 const C = {
   bgA: '#060B16', bgB: '#02060D', bgC: '#0B0A07',
   white: '#FFFFFF',
   green: '#28A745', greenBright: '#34C759',
   amber: '#FFC107',
-  // Keep body copy readable on dark splash — avoid washed-out transparent whites.
   w88: 'rgba(255,255,255,0.95)', w90: 'rgba(255,255,255,0.96)',
   w46: 'rgba(255,255,255,0.88)', w42: 'rgba(255,255,255,0.86)',
   w34: 'rgba(255,255,255,0.82)', w30: 'rgba(255,255,255,0.80)',
   w24: 'rgba(255,255,255,0.78)',
 };
-// JetBrains Mono is not in Info.plist — missing faces paint blank on iOS.
-// Menlo is fine for light labels; NEVER pair it with fontWeight 700/800 on iOS
-// (Core Text can drop the glyph entirely — looks like a missing ₹ amount).
+
 const MONO = Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }) as string;
-// iOS Fabric: Animated opacity fades + LinearGradient-as-flex-parent both leave the
-// narrative blank (only the absolute bottom hint painted). Skip fades on iOS.
-const SKIP_REVEAL_ANIM = Platform.OS === 'ios';
+// iOS Fabric: opacity fades can blank text — use delayed mount instead of opacity.
+const SKIP_OPACITY_FADE = Platform.OS === 'ios';
 const IS_IOS = Platform.OS === 'ios';
-// Amounts use the system UI face + weight so ₹ figures always paint on iOS.
 const AMOUNT_FONT = IS_IOS ? undefined : MONO;
-// iOS New Arch: recycling LinearGradient / react-native-svg during splash→shell
-// unmount crashes in RCTComponentViewRegistry (_enqueueComponentView…).
-// Keep the narrative on plain View/Text only; Android keeps the full look.
+
+/**
+ * Narrative clock — each step starts after the previous has largely landed
+ * so the eye reads a clear top→bottom cascade (not overlapping swaps).
+ */
+const T = {
+  greeting: 100,
+  subtitle: 700,
+  guardian: 1300,
+  logStart: 2000,
+  logStep: 650,
+  tally: 0, // computed from log count
+  payoff: 0,
+  brand: 0,
+  liveSync: 500,
+  hardExit: 24000,
+} as const;
+
+const REVEAL_EASE = Easing.bezier(0.22, 1, 0.36, 1);
+const REVEAL_MS = 520;
+const AFTER_BEAT_MS = 650; // gap after a major section before the next mounts
 
 interface Props {
   onDone: () => void;
-  /** Logged-in customer / fleet name for the greeting line */
   customerName?: string | null;
-}
-
-function Reveal({
-  delay, duration = 600, dy = 12, reduce, style, children,
-}: {
-  delay: number;
-  duration?: number;
-  dy?: number;
-  reduce: boolean;
-  style?: StyleProp<ViewStyle>;
-  children: React.ReactNode;
-}) {
-  // Plain View on iOS / Reduce Motion — never gate copy behind Animated opacity.
-  const v = useRef(new Animated.Value(reduce || SKIP_REVEAL_ANIM ? 1 : 0)).current;
-  useEffect(() => {
-    if (reduce || SKIP_REVEAL_ANIM) {
-      v.setValue(1);
-      return;
-    }
-    v.setValue(0);
-    const a = Animated.timing(v, {
-      toValue: 1,
-      duration,
-      delay,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    });
-    a.start();
-    return () => a.stop();
-  }, [v, delay, duration, reduce]);
-
-  if (reduce || SKIP_REVEAL_ANIM) {
-    return <View style={style}>{children}</View>;
-  }
-
-  const translateY = v.interpolate({ inputRange: [0, 1], outputRange: [dy, 0] });
-  return <Animated.View style={[style, { opacity: v, transform: [{ translateY }] }]}>{children}</Animated.View>;
-}
-
-function inr(n: number): string {
-  const s = String(Math.max(0, Math.round(n)));
-  const last3 = s.slice(-3);
-  const head = s.slice(0, -3);
-  return '₹' + (head ? head.replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',' : '') + last3;
-}
-
-function useCountUp(target: number, duration: number, startDelay: number, reduce: boolean): number {
-  const [val, setVal] = useState(reduce ? target : 0);
-  useEffect(() => {
-    if (reduce) { setVal(target); return; }
-    let raf = 0; let t0 = 0; let lastPaint = 0;
-    const begin = setTimeout(() => {
-      t0 = Date.now();
-      const tick = () => {
-        const now = Date.now();
-        const p = Math.min((now - t0) / duration, 1);
-        // Throttle React re-renders — full RAF would repaint ~60×/s for two counters.
-        if (now - lastPaint >= 50 || p >= 1) {
-          lastPaint = now;
-          setVal(Math.round(p * target));
-        }
-        if (p < 1) raf = requestAnimationFrame(tick);
-      };
-      tick();
-    }, startDelay);
-    return () => { clearTimeout(begin); if (raf) cancelAnimationFrame(raf); };
-  }, [target, duration, startDelay, reduce]);
-  return val;
-}
-
-function greetingForHour(): string {
-  const h = new Date().getHours();
-  if (h < 12) return 'Good morning';
-  if (h < 17) return 'Good afternoon';
-  return 'Good evening';
-}
-
-/** Calendar context for the splash — always the previous day, rolling at midnight. */
-function getPreviousDayContext() {
-  const yesterday = dayjs().subtract(1, 'day');
-  return {
-    label: yesterday.format('DD MMM YYYY'),
-    shortLabel: yesterday.format('DD MMM'),
-    weekday: yesterday.format('dddd'),
-  };
 }
 
 interface SplashLog { tag: string; body: string; highlight?: boolean }
@@ -172,23 +109,228 @@ interface SplashData {
   previousDayShort: string;
   previousWeekday: string;
   totalSaved: number;
-  // Headline figure rendered with the count-up in the "blocked" log line.
   highlightAmount: number;
+  /** THIS FY when current-year recoveries exist; otherwise LAST FY. */
+  savingsPeriodLabel: string;
   actions: number;
   logs: SplashLog[];
   breakdown: SplashBreakdownRow[];
+}
+
+/**
+ * Appends a beat below whatever is already on screen.
+ * Returns null until `delay` — so layout grows top→bottom (no empty reserved
+ * slots). Then eases height + fades in. Never unmounts / fades out afterward.
+ */
+function Reveal({
+  delay,
+  duration = REVEAL_MS,
+  dy = 6,
+  reduce,
+  style,
+  children,
+}: {
+  delay: number;
+  duration?: number;
+  dy?: number;
+  reduce: boolean;
+  style?: StyleProp<ViewStyle>;
+  children: React.ReactNode;
+}) {
+  const [visible, setVisible] = useState(reduce || delay <= 0);
+  const opacity = useRef(new Animated.Value(reduce || delay <= 0 ? 1 : 0)).current;
+  const translateY = useRef(new Animated.Value(reduce || delay <= 0 ? 0 : dy)).current;
+
+  useEffect(() => {
+    if (reduce || delay <= 0) {
+      setVisible(true);
+      opacity.setValue(1);
+      translateY.setValue(0);
+      return;
+    }
+
+    let anim: Animated.CompositeAnimation | null = null;
+    const timer = setTimeout(() => {
+      // Ease the new row into the column so the cascade feels continuous.
+      LayoutAnimation.configureNext({
+        duration: 280,
+        create: {
+          type: LayoutAnimation.Types.easeInEaseOut,
+          property: LayoutAnimation.Properties.opacity,
+        },
+        update: { type: LayoutAnimation.Types.easeInEaseOut },
+      });
+      setVisible(true);
+
+      if (SKIP_OPACITY_FADE) {
+        opacity.setValue(1);
+        translateY.setValue(0);
+        return;
+      }
+
+      opacity.setValue(0);
+      translateY.setValue(dy);
+      anim = Animated.parallel([
+        Animated.timing(opacity, {
+          toValue: 1,
+          duration,
+          easing: REVEAL_EASE,
+          useNativeDriver: true,
+        }),
+        Animated.timing(translateY, {
+          toValue: 0,
+          duration,
+          easing: REVEAL_EASE,
+          useNativeDriver: true,
+        }),
+      ]);
+      anim.start();
+    }, delay);
+
+    return () => {
+      clearTimeout(timer);
+      anim?.stop();
+    };
+  }, [delay, duration, dy, reduce, opacity, translateY]);
+
+  if (!visible) return null;
+
+  if (reduce || SKIP_OPACITY_FADE) {
+    return <View style={style}>{children}</View>;
+  }
+
+  return (
+    <Animated.View style={[style, { opacity, transform: [{ translateY }] }]}>
+      {children}
+    </Animated.View>
+  );
+}
+
+/**
+ * Isolated count-up — does not re-render the whole splash tree.
+ *
+ * startDelay is relative to THIS mount (Reveal already delayed the section).
+ * Passing absolute splash-timeline delays here double-waited and left ₹0 on screen
+ * until auto-advance dismissed the splash.
+ */
+function CountUpAmount({
+  target,
+  duration = 800,
+  startDelay = 40,
+  reduce,
+  style,
+}: {
+  target: number;
+  duration?: number;
+  startDelay?: number;
+  reduce: boolean;
+  style?: StyleProp<TextStyle>;
+}) {
+  const safeTarget = Math.max(0, Math.round(Number(target) || 0));
+  const [val, setVal] = useState(reduce ? safeTarget : 0);
+
+  useEffect(() => {
+    if (reduce || safeTarget <= 0) {
+      setVal(safeTarget);
+      return;
+    }
+
+    let raf = 0;
+    let lastPaint = 0;
+    let cancelled = false;
+    setVal(0);
+
+    const begin = setTimeout(() => {
+      if (cancelled) return;
+      const t0 = Date.now();
+      const tick = () => {
+        if (cancelled) return;
+        const now = Date.now();
+        const p = Math.min((now - t0) / duration, 1);
+        const eased = 1 - (1 - p) ** 3;
+        if (now - lastPaint >= 32 || p >= 1) {
+          lastPaint = now;
+          setVal(Math.round(eased * safeTarget));
+        }
+        if (p < 1) {
+          raf = requestAnimationFrame(tick);
+        } else {
+          // Guarantee the final figure even if a frame was dropped.
+          setVal(safeTarget);
+        }
+      };
+      tick();
+    }, startDelay);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(begin);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [safeTarget, duration, startDelay, reduce]);
+
+  return (
+    <Text style={style} allowFontScaling={false}>
+      {inr(val)}
+    </Text>
+  );
+}
+
+/** Coerce scalar API money (number | numeric-string). Objects use readFyPeriodAmount. */
+function coerceMoney(value: unknown): number {
+  if (value == null || value === '') return 0;
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value.replace(/,/g, '').trim());
+    return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 0;
+  }
+  // Object periods must not go through ?? thisYear (0 would hide lastYear).
+  if (typeof value === 'object') {
+    return Math.max(
+      readFyPeriodAmount(value, 'thisYear'),
+      readFyPeriodAmount(value, 'lastYear'),
+    );
+  }
+  return 0;
+}
+
+function inr(n: number): string {
+  const s = String(Math.max(0, Math.round(n)));
+  const last3 = s.slice(-3);
+  const head = s.slice(0, -3);
+  return '₹' + (head ? head.replace(/\B(?=(\d{2})+(?!\d))/g, ',') + ',' : '') + last3;
+}
+
+function greetingForHour(): string {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+function getPreviousDayContext() {
+  const yesterday = dayjs().subtract(1, 'day');
+  return {
+    label: yesterday.format('DD MMM YYYY'),
+    shortLabel: yesterday.format('DD MMM'),
+    weekday: yesterday.format('dddd'),
+  };
 }
 
 const EMPTY_SPLASH: SplashData = {
   previousDayLabel: getPreviousDayContext().label,
   previousDayShort: getPreviousDayContext().shortLabel,
   previousWeekday: getPreviousDayContext().weekday,
-  totalSaved: 0, highlightAmount: 0, actions: 0, logs: [], breakdown: [],
+  totalSaved: 0,
+  highlightAmount: 0,
+  savingsPeriodLabel: 'THIS FY',
+  actions: 0,
+  logs: [],
+  breakdown: [],
 };
 
-// Maps the real dashboard summary into the splash's narrative slots — toll and
-// fleet utilisation figures come from yesterday's bucket so the story matches
-// "what happened while you were away" and updates automatically each calendar day.
 function buildSplashData(summary: DashboardSummary | null): SplashData {
   const day = getPreviousDayContext();
   if (!summary) {
@@ -200,9 +342,44 @@ function buildSplashData(summary: DashboardSummary | null): SplashData {
     };
   }
 
-  const claimsRecovered = summary.savings?.fyClaimsRecovered ?? 0;
-  const incentivePaid = summary.savings?.fyIncentivePaid ?? 0;
-  const totalSaved = summary.savings?.fyTotalSavings ?? (Number(claimsRecovered) + Number(incentivePaid));
+  // Backend returns `{ thisYear, lastYear }` objects — never Number(object).
+  const hasIncentive = hasIncentiveProgramFromSummary(summary.savings);
+  const fy = buildFySavingsFromSummary(summary.savings, summary.claims, hasIncentive);
+
+  const thisClaims = Math.max(
+    fy.thisYear.claimsRecovered,
+    readFyPeriodAmount(summary.savings?.fyClaimsRecovered, 'thisYear'),
+    coerceMoney(summary.claims?.recoveredFY),
+  );
+  const lastClaims = Math.max(
+    fy.lastYear.claimsRecovered,
+    readFyPeriodAmount(summary.savings?.fyClaimsRecovered, 'lastYear'),
+    coerceMoney(summary.claims?.recoveredLastFY),
+  );
+  const thisIncentive = Math.max(
+    fy.thisYear.incentiveAmount,
+    readFyPeriodAmount(summary.savings?.fyIncentivePaid, 'thisYear'),
+  );
+  const lastIncentive = Math.max(
+    fy.lastYear.incentiveAmount,
+    readFyPeriodAmount(summary.savings?.fyIncentivePaid, 'lastYear'),
+  );
+
+  const thisTotal = Math.max(
+    resolveFySavingsDisplayTotal(summary),
+    coerceMoney(summary.savings?.fyTotalSavings),
+    thisClaims + (hasIncentive ? thisIncentive : 0),
+    thisClaims,
+  );
+  const lastTotal = lastClaims + (hasIncentive ? lastIncentive : 0);
+
+  // Prefer this FY; if empty, show last FY so the tally is not stuck at ₹0.
+  const useLastFy = thisTotal <= 0 && lastTotal > 0;
+  const claimsRecovered = useLastFy ? lastClaims : thisClaims;
+  const incentivePaid = useLastFy ? lastIncentive : thisIncentive;
+  const totalSaved = useLastFy ? lastTotal : thisTotal;
+  const periodTail = useLastFy ? 'last FY' : 'this FY';
+  const savingsPeriodLabel = useLastFy ? 'LAST FY' : 'THIS FY';
 
   const yesterdayToll = summary.tollSpend?.yesterday;
   const txnCount = yesterdayToll?.txnCount ?? 0;
@@ -221,10 +398,18 @@ function buildSplashData(summary: DashboardSummary | null): SplashData {
       body: `${txnCount} toll transactions on ${dayRef}${tollAmount > 0 ? ` · ${inr(tollAmount)}` : ''}.`,
     });
   }
-  if (Number(claimsRecovered) > 0) logs.push({ tag: 'CLAIMS', body: `recovered through verified claims · ${dayRef}.`, highlight: true });
-  if (driverExpiring > 0) logs.push({ tag: 'DRIVERS', body: `${driverExpiring} licence renewal reminders raised · ${dayRef}.` });
-  if (complianceAlerts > 0) logs.push({ tag: 'COMPLIANCE', body: `${complianceAlerts} compliance alerts flagged · ${dayRef}.` });
-  if (pendingChallans > 0) logs.push({ tag: 'CHALLAN', body: `${pendingChallans} pending challans tracked · ${dayRef}.` });
+  if (claimsRecovered > 0) {
+    logs.push({ tag: 'CLAIMS', body: `recovered through verified claims · ${dayRef}.`, highlight: true });
+  }
+  if (driverExpiring > 0) {
+    logs.push({ tag: 'DRIVERS', body: `${driverExpiring} licence renewal reminders raised · ${dayRef}.` });
+  }
+  if (complianceAlerts > 0) {
+    logs.push({ tag: 'COMPLIANCE', body: `${complianceAlerts} compliance alerts flagged · ${dayRef}.` });
+  }
+  if (pendingChallans > 0) {
+    logs.push({ tag: 'CHALLAN', body: `${pendingChallans} pending challans tracked · ${dayRef}.` });
+  }
   if (yesterdayVehicleCount > 0) {
     logs.push({
       tag: 'FLEET',
@@ -235,14 +420,16 @@ function buildSplashData(summary: DashboardSummary | null): SplashData {
     logs.push({ tag: 'FASTAG', body: `FASTag balance ${inr(fastagBalance)} monitored at end of ${dayRef}.` });
   }
 
-  // Recovery breakdown from the real savings components; total stays consistent
-  // with the FY total by adding an "other recoveries" remainder when needed.
   const breakdown: SplashBreakdownRow[] = [];
-  if (Number(claimsRecovered) > 0) breakdown.push({ label: 'Claims recovered', tail: 'this FY', amt: Number(claimsRecovered) });
-  if (Number(incentivePaid) > 0) breakdown.push({ label: 'Safety incentive earned', tail: 'this FY', amt: Number(incentivePaid) });
+  if (claimsRecovered > 0) {
+    breakdown.push({ label: 'Claims recovered', tail: periodTail, amt: claimsRecovered });
+  }
+  if (incentivePaid > 0) {
+    breakdown.push({ label: 'Safety incentive earned', tail: periodTail, amt: incentivePaid });
+  }
   const accounted = breakdown.reduce((sum, row) => sum + row.amt, 0);
   if (totalSaved > accounted) {
-    breakdown.push({ label: 'Other recoveries', tail: 'this FY', amt: totalSaved - accounted });
+    breakdown.push({ label: 'Other recoveries', tail: periodTail, amt: totalSaved - accounted });
   }
 
   return {
@@ -250,16 +437,14 @@ function buildSplashData(summary: DashboardSummary | null): SplashData {
     previousDayShort: day.shortLabel,
     previousWeekday: day.weekday,
     totalSaved,
-    // Fall back to the FY total so the headline is never ₹0 when only the
-    // aggregate savings figure is available.
-    highlightAmount: Number(claimsRecovered) > 0 ? Number(claimsRecovered) : totalSaved,
+    highlightAmount: claimsRecovered > 0 ? claimsRecovered : totalSaved,
+    savingsPeriodLabel,
     actions: logs.length,
     logs: logs.slice(0, 5),
     breakdown,
   };
 }
 
-/** Prefer a real fleet customer name — never show the BDM "Customer Group Admin" label. */
 function pickFleetCustomerName(...candidates: Array<string | null | undefined>): string | null {
   for (const raw of candidates) {
     const name = raw?.trim();
@@ -272,35 +457,22 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
   const insets = useSafeAreaInsets();
   const dispatch = useAppDispatch();
   const { user, dashboardContext } = useAppSelector((s) => s.auth);
-  // Default false so the narrative mounts immediately — waiting on AccessibilityInfo
-  // previously left only the dark LinearGradient shell (looks like a black screen).
   const [reduce, setReduce] = useState(false);
   const [breakdownOpen, setBreakdownOpen] = useState(false);
   const [interacted, setInteracted] = useState(false);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
-  // Gate auto-advance until the summary fetch settles — otherwise iOS's short
-  // hold dismisses before logs/tally paint and the splash looks empty.
   const [summaryReady, setSummaryReady] = useState(false);
-  // CGA login customerName is the BDM account — resolve the selected fleet customer separately.
   const [groupAdminCustomerName, setGroupAdminCustomerName] = useState<string | null>(() =>
     pickFleetCustomerName(dashboardContext?.label),
   );
+
   const doneRef = useRef(false);
   const autoRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hardExitRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onDoneRef = useRef(onDone);
   onDoneRef.current = onDone;
+  const dawn = useRef(new Animated.Value(IS_IOS ? 0.35 : 0)).current;
 
-  const ring1 = useRef(new Animated.Value(0)).current;
-  const ring2 = useRef(new Animated.Value(0)).current;
-  const breathe = useRef(new Animated.Value(0)).current;
-  // Start dawn visible enough that a failed native fade cannot hide the whole palette.
-  const dawn = useRef(new Animated.Value(Platform.OS === 'ios' ? 0.35 : 0)).current;
-
-  // Pull the real fleet summary so the splash figures match the dashboard. The
-  // session scopes the customer; admin roles still pass an explicit customerId.
-  // Depend on customerId (not the whole context object) so CGA label updates do
-  // not re-fetch and restart the auto-advance timer mid-read.
   const activeCustomerId = resolveActiveCustomerId(dashboardContext, user?.defaultCustomerId);
   useEffect(() => {
     let alive = true;
@@ -321,8 +493,6 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
     return () => { alive = false; };
   }, [user?.roleKey, activeCustomerId]);
 
-  // Customer group admin: map defaultCustomerId → associated-customers name so the
-  // splash subtitle shows the fleet customer, not the BDM account from sign-in.
   useEffect(() => {
     if (!isCustomerGroupAdmin(user?.roleKey)) return;
 
@@ -331,7 +501,6 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
     const applyName = (name: string, customerId: number) => {
       if (!alive) return;
       setGroupAdminCustomerName(name);
-      // Persist so the dashboard header/dropdown don't briefly flash the BDM label.
       dispatch(setDashboardContext({
         customerId,
         scopeType: 'CUSTOMER',
@@ -391,23 +560,17 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
   const splash = useMemo(() => buildSplashData(summary), [summary]);
   const reduceMotion = reduce === true;
 
-  // Count-ups re-run when their target changes. On iOS show final figures immediately
-  // so the splash is readable without waiting on delayed RAF counters.
-  const susAmount = useCountUp(
-    splash.highlightAmount,
-    700,
-    2600,
-    reduceMotion || SKIP_REVEAL_ANIM,
-  );
-  const total = useCountUp(
-    splash.totalSaved,
-    1000,
-    4600,
-    reduceMotion || SKIP_REVEAL_ANIM,
-  );
+  // Cascade clock: next major section waits until the previous row has landed.
+  const logCount = splash.logs.length;
+  const lastLogAt = logCount > 0
+    ? T.logStart + (logCount - 1) * T.logStep
+    : T.guardian;
+  const tallyDelay = lastLogAt + AFTER_BEAT_MS;
+  const payoffDelay = tallyDelay + AFTER_BEAT_MS + 200;
+  const brandDelay = payoffDelay + AFTER_BEAT_MS + 200;
+  const autoAdvanceDelay = brandDelay + 2400;
 
   const isGroupAdmin = isCustomerGroupAdmin(user?.roleKey);
-  // Summary / associated-customers for CGA; plain customerName for everyone else.
   const fleetLabel =
     pickFleetCustomerName(
       summary?.customerName,
@@ -423,8 +586,6 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
     doneRef.current = true;
     if (autoRef.current) { clearTimeout(autoRef.current); autoRef.current = null; }
     if (hardExitRef.current) { clearTimeout(hardExitRef.current); hardExitRef.current = null; }
-    // Defer shell mount until after the current Fabric transaction — immediate
-    // unmount of LinearGradient/Svg during mount instructions SIGSEGVs on iOS.
     InteractionManager.runAfterInteractions(() => {
       setTimeout(() => onDoneRef.current(), IS_IOS ? 48 : 0);
     });
@@ -438,12 +599,9 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
     return () => { mounted = false; };
   }, []);
 
-  // Narrative auto-advance — wait until summary paints, then hold long enough on
-  // iOS to read greeting + tally (Fabric used to dismiss while amounts were blank).
   useEffect(() => {
     if (!summaryReady) return;
-    const ms = reduceMotion ? 3200 : IS_IOS ? 9000 : 7600;
-    // One frame after ready so tally Text commits before the clock starts.
+    const ms = reduceMotion ? 3600 : autoAdvanceDelay;
     const start = requestAnimationFrame(() => {
       autoRef.current = setTimeout(finish, ms);
     });
@@ -451,49 +609,40 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
       cancelAnimationFrame(start);
       if (autoRef.current) clearTimeout(autoRef.current);
     };
-  }, [reduceMotion, summaryReady, finish]);
+  }, [reduceMotion, summaryReady, autoAdvanceDelay, finish]);
 
-  // Absolute escape hatch: even if the summary fetch hangs or the user opens
-  // the tally and never taps Continue, leave the splash so login never soft-locks.
   useEffect(() => {
-    hardExitRef.current = setTimeout(finish, 20000);
+    hardExitRef.current = setTimeout(finish, T.hardExit);
     return () => { if (hardExitRef.current) clearTimeout(hardExitRef.current); };
   }, [finish]);
 
+  // One soft dawn fade only — ring/breathe loops competed with reveals for GPU
+  // and made mid-narrative transitions hitch on mid-range devices.
   useEffect(() => {
-    // Decorative loops only — skip on iOS where native-driver opacity is unreliable.
-    if (reduceMotion || SKIP_REVEAL_ANIM) return;
-    const mkRing = (v: Animated.Value, delay: number) =>
-      Animated.loop(Animated.sequence([
-        Animated.delay(delay),
-        Animated.timing(v, { toValue: 1, duration: 2600, easing: Easing.out(Easing.ease), useNativeDriver: true }),
-        Animated.timing(v, { toValue: 0, duration: 0, useNativeDriver: true }),
-      ]));
-    const r1 = mkRing(ring1, 0);
-    const r2 = mkRing(ring2, 1300);
-    const br = Animated.loop(Animated.sequence([
-      Animated.timing(breathe, { toValue: 1, duration: 1300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      Animated.timing(breathe, { toValue: 0, duration: 1300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-    ]));
-    const dw = Animated.timing(dawn, { toValue: 1, duration: 1400, delay: 4200, easing: Easing.ease, useNativeDriver: true });
-    r1.start(); r2.start(); br.start(); dw.start();
-    return () => { r1.stop(); r2.stop(); br.stop(); dw.stop(); };
-  }, [reduceMotion, ring1, ring2, breathe, dawn]);
+    if (reduceMotion || SKIP_OPACITY_FADE) {
+      dawn.setValue(1);
+      return;
+    }
+    const dw = Animated.timing(dawn, {
+      toValue: 1,
+      duration: 1600,
+      delay: tallyDelay,
+      easing: REVEAL_EASE,
+      useNativeDriver: true,
+    });
+    dw.start();
+    return () => dw.stop();
+  }, [reduceMotion, dawn, tallyDelay]);
 
-  const cancelAuto = () => { if (autoRef.current) { clearTimeout(autoRef.current); autoRef.current = null; } };
-  const onTapTally = () => { setInteracted(true); cancelAuto(); setBreakdownOpen((o) => !o); };
-
-  const ringStyle = (v: Animated.Value) => ({
-    opacity: v.interpolate({ inputRange: [0, 1], outputRange: [0.55, 0] }),
-    transform: [{ scale: v.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1.7] }) }],
-  });
-  const breatheStyle = {
-    opacity: breathe.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] }),
-    transform: [{ scale: breathe.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1.04] }) }],
+  const cancelAuto = () => {
+    if (autoRef.current) { clearTimeout(autoRef.current); autoRef.current = null; }
+  };
+  const onTapTally = () => {
+    setInteracted(true);
+    cancelAuto();
+    setBreakdownOpen((o) => !o);
   };
 
-  // iOS: solid Views only (no LinearGradient / Svg) — Fabric recycle on dismiss
-  // was SIGSEGV in RCTComponentViewRegistry. Android keeps gradients + icons.
   return (
     <View style={[styles.fill, { backgroundColor: C.bgB }]}>
       {IS_IOS ? (
@@ -538,51 +687,74 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
         </>
       ) : null}
 
-      <Reveal delay={6900} duration={500} dy={0} reduce={reduceMotion} style={[styles.liveSync, { top: insets.top + 12 }]}>
+      <Reveal
+        delay={T.liveSync}
+        duration={500}
+        dy={0}
+        reduce={reduceMotion}
+        style={[styles.liveSync, { top: insets.top + 12 }]}
+      >
         <View style={styles.liveDot} />
         <Text style={styles.liveText}>LIVE SYNC</Text>
       </Reveal>
 
+      {/*
+        Top-aligned column that grows downward as each Reveal mounts.
+        No auto-scroll — scrolling away made earlier beats look like they left.
+      */}
       <ScrollView
         style={styles.fill}
-        contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 20, paddingBottom: 72 }]}
-        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[
+          styles.scroll,
+          {
+            paddingTop: insets.top + 20,
+            // Extra bottom pad so the Karins brand clears the tap hint on short phones.
+            paddingBottom: Math.max(insets.bottom, 16) + 88,
+            minHeight: '100%',
+          },
+        ]}
+        showsVerticalScrollIndicator
+        persistentScrollbar={Platform.OS === 'android'}
         scrollEnabled
+        nestedScrollEnabled
         removeClippedSubviews={false}
+        bounces
+        alwaysBounceVertical={false}
+        overScrollMode="auto"
       >
-        <Reveal delay={150} reduce={reduceMotion}>
+        {/*
+          Hold the cascade until summary settles — otherwise CountUp mounts with
+          target 0 and the tally never re-animates before auto-advance.
+        */}
+        {!summaryReady ? (
+          <View style={styles.loadingBlock}>
+            <Text style={styles.greeting}>{greetingLine}</Text>
+            <Text style={styles.subtitle}>Preparing your fleet briefing…</Text>
+          </View>
+        ) : (
+        <>
+        <Reveal delay={T.greeting} reduce={reduceMotion}>
           <Text style={styles.greeting}>{greetingLine}</Text>
         </Reveal>
-        <Reveal delay={500} reduce={reduceMotion} style={{ marginBottom: 22 }}>
+
+        <Reveal delay={T.subtitle} reduce={reduceMotion} style={styles.subtitleWrap}>
           <Text style={styles.subtitle}>
             {fleetLabel} · {splash.previousWeekday}, {splash.previousDayLabel}
           </Text>
         </Reveal>
 
-        <Reveal delay={950} reduce={reduceMotion} style={styles.guardian}>
+        <Reveal delay={T.guardian} reduce={reduceMotion} style={styles.guardian}>
           <View style={styles.shieldWrap}>
-            {!reduceMotion && !SKIP_REVEAL_ANIM && <Animated.View style={[styles.ring, ringStyle(ring1)]} />}
-            {!reduceMotion && !SKIP_REVEAL_ANIM && <Animated.View style={[styles.ring, ringStyle(ring2)]} />}
-            {!reduceMotion && !SKIP_REVEAL_ANIM ? (
-              <Animated.View style={[styles.shieldCore, breatheStyle]}>
+            <View style={styles.shieldCore}>
+              {IS_IOS ? (
+                <Text style={styles.shieldCheck}>✓</Text>
+              ) : (
                 <Svg width={15} height={15} viewBox="0 0 16 16">
                   <Path d="M8 1.5l5 2v3.5c0 3.2-2.1 5.6-5 6.8-2.9-1.2-5-3.6-5-6.8V3.5l5-2z" stroke={C.greenBright} strokeWidth={1.3} fill="rgba(52,199,89,0.08)" />
                   <Path d="M5.6 8l1.7 1.7L10.6 6" stroke={C.greenBright} strokeWidth={1.4} fill="none" strokeLinecap="round" strokeLinejoin="round" />
                 </Svg>
-              </Animated.View>
-            ) : (
-              <View style={styles.shieldCore}>
-                {/* Text glyph on iOS — Svg Path recycle during dismiss crashed Fabric. */}
-                {IS_IOS ? (
-                  <Text style={styles.shieldCheck}>✓</Text>
-                ) : (
-                  <Svg width={15} height={15} viewBox="0 0 16 16">
-                    <Path d="M8 1.5l5 2v3.5c0 3.2-2.1 5.6-5 6.8-2.9-1.2-5-3.6-5-6.8V3.5l5-2z" stroke={C.greenBright} strokeWidth={1.3} fill="rgba(52,199,89,0.08)" />
-                    <Path d="M5.6 8l1.7 1.7L10.6 6" stroke={C.greenBright} strokeWidth={1.4} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-                  </Svg>
-                )}
-              </View>
-            )}
+              )}
+            </View>
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.nightWatch}>FLEET ACTIVITY · {splash.previousDayShort.toUpperCase()}</Text>
@@ -596,7 +768,12 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
 
         <View style={styles.logList}>
           {splash.logs.map((l, i) => (
-            <Reveal key={`${l.tag}-${i}`} delay={1600 + i * 500} duration={550} reduce={reduceMotion} style={styles.logRow}>
+            <Reveal
+              key={`${l.tag}-${i}`}
+              delay={T.logStart + i * T.logStep}
+              reduce={reduceMotion}
+              style={styles.logRow}
+            >
               <View style={styles.checkCircle}>
                 {IS_IOS ? (
                   <Text style={styles.logCheck}>✓</Text>
@@ -609,9 +786,17 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
               <View style={{ flex: 1 }}>
                 <Text style={styles.logTime}>{l.tag}</Text>
                 {l.highlight ? (
-                  <Text style={styles.logBody}>
-                    <Text style={styles.amber700}>{inr(susAmount)}</Text> {l.body}
-                  </Text>
+                  <View style={styles.logBodyRow}>
+                    <CountUpAmount
+                      key={`claim-${splash.highlightAmount}`}
+                      target={splash.highlightAmount}
+                      duration={700}
+                      startDelay={40}
+                      reduce={reduceMotion}
+                      style={[styles.logBody, styles.amber700]}
+                    />
+                    <Text style={styles.logBody}> {l.body}</Text>
+                  </View>
                 ) : (
                   <Text style={styles.logBody}>{l.body}</Text>
                 )}
@@ -620,76 +805,98 @@ export function PostLoginSplashScreen({ onDone, customerName }: Props) {
           ))}
         </View>
 
-        <Reveal delay={4400} reduce={reduceMotion} style={{ marginBottom: 20 }}>
+        <Reveal delay={tallyDelay} reduce={reduceMotion} style={styles.tallyWrap}>
           <Pressable onPress={onTapTally}>
             <View style={styles.tally}>
               {!IS_IOS ? (
                 <LinearGradient
                   colors={['rgba(255,193,7,0.10)', 'rgba(255,193,7,0.03)']}
-                  start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
                   style={StyleSheet.absoluteFill}
                   pointerEvents="none"
                 />
               ) : null}
               <View style={styles.tallyTop}>
                 <View style={{ flex: 1, paddingRight: 8 }}>
-                  <Text style={styles.tallyLabel}>LOSS PREVENTED · THIS FY</Text>
+                  <Text style={styles.tallyLabel}>
+                    LOSS PREVENTED · {splash.savingsPeriodLabel}
+                  </Text>
                   <Text style={styles.tallySub}>recovered & saved for your fleet</Text>
                 </View>
-                <Text style={styles.tallyTotal} allowFontScaling={false}>
-                  {inr(total)}
-                </Text>
+                <CountUpAmount
+                  key={`tally-${splash.totalSaved}-${splash.savingsPeriodLabel}`}
+                  target={splash.totalSaved}
+                  duration={900}
+                  startDelay={40}
+                  reduce={reduceMotion}
+                  style={styles.tallyTotal}
+                />
               </View>
 
               {splash.breakdown.length > 0 ? (
                 <View style={styles.tallyAfford}>
-                  <Text style={styles.afford}>{breakdownOpen ? 'HIDE BREAKDOWN' : 'TAP TO SEE BREAKDOWN'}</Text>
+                  <Text style={styles.afford}>
+                    {breakdownOpen ? 'HIDE BREAKDOWN' : 'TAP TO SEE BREAKDOWN'}
+                  </Text>
                   {IS_IOS ? (
                     <Text style={styles.affordChevron}>{breakdownOpen ? '▲' : '▼'}</Text>
                   ) : (
-                    <Svg width={11} height={11} viewBox="0 0 12 12" style={{ transform: [{ rotate: breakdownOpen ? '180deg' : '0deg' }] }}>
+                    <Svg
+                      width={11}
+                      height={11}
+                      viewBox="0 0 12 12"
+                      style={{ transform: [{ rotate: breakdownOpen ? '180deg' : '0deg' }] }}
+                    >
                       <Path d="M2.5 4.5L6 8l3.5-3.5" stroke="rgba(255,193,7,0.78)" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
                     </Svg>
                   )}
                 </View>
               ) : null}
 
-              {breakdownOpen && splash.breakdown.length > 0 && (
+              {breakdownOpen && splash.breakdown.length > 0 ? (
                 <View style={styles.breakdown}>
                   {splash.breakdown.map((b) => (
                     <View key={b.label} style={styles.bdRow}>
-                      <Text style={styles.bdLabel}>{b.label} <Text style={styles.bdTail}>{b.tail}</Text></Text>
+                      <Text style={styles.bdLabel}>
+                        {b.label} <Text style={styles.bdTail}>{b.tail}</Text>
+                      </Text>
                       <Text style={styles.bdAmt} allowFontScaling={false}>{inr(b.amt)}</Text>
                     </View>
                   ))}
                   <View style={[styles.bdRow, styles.bdTotalRow]}>
                     <Text style={styles.bdTotalLabel}>TOTAL PREVENTED</Text>
-                    <Text style={styles.bdTotalAmt} allowFontScaling={false}>{inr(splash.totalSaved)}</Text>
+                    <Text style={styles.bdTotalAmt} allowFontScaling={false}>
+                      {inr(splash.totalSaved)}
+                    </Text>
                   </View>
-                  <Text style={styles.bdNote}>Figures reflect your fleet&apos;s verified recoveries and savings this financial year.</Text>
+                  <Text style={styles.bdNote}>
+                    Figures reflect your fleet&apos;s verified recoveries and savings this financial year.
+                  </Text>
                 </View>
-              )}
+              ) : null}
             </View>
           </Pressable>
         </Reveal>
 
-        <Reveal delay={5400} reduce={reduceMotion}>
-          <Text style={styles.payoff}>Everything was handled.{'\n'}Before you opened your eyes.</Text>
+        <Reveal delay={payoffDelay} reduce={reduceMotion} style={styles.payoffWrap}>
+          <Text style={styles.payoff}>
+            Everything was handled.{'\n'}Before you opened your eyes.
+          </Text>
           <Text style={styles.promise}>That&apos;s not a feature. That&apos;s a promise.</Text>
         </Reveal>
 
-        <Reveal delay={6200} reduce={reduceMotion} style={{ marginTop: 22 }}>
+        <Reveal delay={brandDelay} reduce={reduceMotion} style={styles.brandBlock}>
           <View style={styles.brandRow}>
             <Text style={styles.brandKarins}>Karins</Text>
             <Text style={styles.brandFleet}>fleet</Text>
           </View>
           <Text style={styles.brandTag}>FLEET INTELLIGENCE PLATFORM</Text>
         </Reveal>
-
-        <View style={{ height: 64 }} />
+        </>
+        )}
       </ScrollView>
 
-      {/* Always painted — never behind a delayed Reveal, so tap-to-skip cannot soft-lock. */}
       <View style={[styles.bottomHintWrap, { bottom: Math.max(insets.bottom, 16) + 8 }]}>
         <Pressable onPress={finish} hitSlop={16} accessibilityRole="button" accessibilityLabel="Continue to home">
           <Text style={styles.bottomHint}>
@@ -706,35 +913,90 @@ const styles = StyleSheet.create({
   fill: { flex: 1 },
   blueGlow: { position: 'absolute', top: -70, left: '50%', marginLeft: -130 },
   dawnGlow: { position: 'absolute', bottom: -40, left: '50%', marginLeft: -180 },
-  liveSync: { position: 'absolute', right: 22, flexDirection: 'row', alignItems: 'center', gap: 6, zIndex: 3 },
+  liveSync: {
+    position: 'absolute',
+    right: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    zIndex: 3,
+  },
   liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.green },
   liveText: { fontSize: 9, fontFamily: MONO, color: C.w30, letterSpacing: 0.7 },
 
-  scroll: { paddingHorizontal: PAD },
+  scroll: {
+    paddingHorizontal: PAD,
+    // Grow to fill short stories; when content is taller (small phones / many logs)
+    // ScrollView can scroll so the Karins brand stays reachable.
+    flexGrow: 1,
+    alignItems: 'stretch',
+    justifyContent: 'flex-start',
+  },
+  loadingBlock: { paddingTop: 8 },
 
-  greeting: { fontSize: 27, fontWeight: '700', color: C.white, letterSpacing: -0.5, lineHeight: 30, marginBottom: 4 },
+  greeting: {
+    fontSize: 26,
+    fontWeight: '700',
+    color: C.white,
+    letterSpacing: -0.5,
+    lineHeight: 30,
+    marginBottom: 2,
+  },
+  subtitleWrap: { marginBottom: 14 },
   subtitle: { fontSize: 13.5, color: C.w46, lineHeight: 20 },
 
-  guardian: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 24 },
-  shieldWrap: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
-  ring: { position: 'absolute', width: 38, height: 38, borderRadius: 19, borderWidth: 1.5, borderColor: 'rgba(40,167,69,0.5)' },
-  shieldCore: {
-    width: 30, height: 30, borderRadius: 15, backgroundColor: 'rgba(40,167,69,0.12)',
-    borderWidth: 1.5, borderColor: 'rgba(40,167,69,0.6)', alignItems: 'center', justifyContent: 'center',
+  guardian: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 14,
   },
-  nightWatch: { fontSize: 9.5, fontFamily: MONO, color: 'rgba(40,167,69,0.85)', letterSpacing: 1.2, marginBottom: 3 },
+  shieldWrap: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
+  ring: {
+    position: 'absolute',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1.5,
+    borderColor: 'rgba(40,167,69,0.5)',
+  },
+  shieldCore: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(40,167,69,0.12)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(40,167,69,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nightWatch: {
+    fontSize: 9.5,
+    fontFamily: MONO,
+    color: 'rgba(40,167,69,0.85)',
+    letterSpacing: 1.2,
+    marginBottom: 3,
+  },
   guardianLine: { fontSize: 14, fontWeight: '600', color: C.w90, lineHeight: 18 },
   shieldCheck: { fontSize: 11, fontWeight: '700', color: C.greenBright, lineHeight: 13 },
 
-  logList: { gap: 14, marginBottom: 22 },
-  logRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 13 },
+  logList: { gap: 10, marginBottom: 14 },
+  logRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   checkCircle: {
-    width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(40,167,69,0.12)',
-    borderWidth: 1.5, borderColor: 'rgba(40,167,69,0.55)', alignItems: 'center', justifyContent: 'center', marginTop: 2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(40,167,69,0.12)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(40,167,69,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
   },
   logCheck: { fontSize: 11, fontWeight: '700', color: C.green, lineHeight: 13 },
   logTime: { fontSize: 10, color: C.w24, fontFamily: MONO, marginBottom: 2, letterSpacing: 0.4 },
   logBody: { fontSize: 14.5, fontWeight: '500', color: C.w88, lineHeight: 19 },
+  logBodyRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline' },
   amber700: { color: C.amber, fontWeight: '700' },
   affordChevron: { fontSize: 9, color: 'rgba(255,193,7,0.78)', fontWeight: '700' },
 
@@ -750,7 +1012,6 @@ const styles = StyleSheet.create({
   tallyTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   tallyLabel: { fontSize: 10, color: C.w42, letterSpacing: 1, marginBottom: 3 },
   tallySub: { fontSize: 11.5, color: C.w34 },
-  // System face + weight on iOS — Menlo+800 was painting an empty amber slot.
   tallyTotal: {
     fontSize: 27,
     fontWeight: '800',
@@ -760,11 +1021,23 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   tallyAfford: {
-    marginTop: 11, borderTopWidth: 1, borderTopColor: 'rgba(255,193,7,0.14)', height: 34,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    marginTop: 11,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,193,7,0.14)',
+    height: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
   },
   afford: { fontSize: 10, fontWeight: '600', color: 'rgba(255,193,7,0.78)', letterSpacing: 0.5 },
-  breakdown: { borderTopWidth: 1, borderTopColor: 'rgba(255,193,7,0.14)', paddingTop: 11, paddingBottom: 13, gap: 9 },
+  breakdown: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,193,7,0.14)',
+    paddingTop: 11,
+    paddingBottom: 13,
+    gap: 9,
+  },
   bdRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   bdLabel: { fontSize: 12, color: 'rgba(255,255,255,0.90)', flex: 1 },
   bdTail: { color: C.w42 },
@@ -774,7 +1047,12 @@ const styles = StyleSheet.create({
     color: C.amber,
     ...(AMOUNT_FONT ? { fontFamily: AMOUNT_FONT } : {}),
   },
-  bdTotalRow: { marginTop: 2, paddingTop: 9, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.08)' },
+  bdTotalRow: {
+    marginTop: 2,
+    paddingTop: 9,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.08)',
+  },
   bdTotalLabel: { fontSize: 11, color: 'rgba(255,255,255,0.85)', letterSpacing: 0.4 },
   bdTotalAmt: {
     fontSize: 14,
@@ -784,15 +1062,43 @@ const styles = StyleSheet.create({
   },
   bdNote: { fontSize: 10, color: C.w30, lineHeight: 14, marginTop: 1 },
 
-  payoff: { fontSize: 21, fontWeight: '800', color: C.white, lineHeight: 26, letterSpacing: -0.3 },
-  promise: { fontSize: 12.5, color: C.w34, marginTop: 9, fontStyle: 'italic' },
+  tallyWrap: { marginBottom: 14 },
+  payoffWrap: { marginBottom: 4 },
+  payoff: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: C.white,
+    lineHeight: 25,
+    letterSpacing: -0.3,
+  },
+  promise: { fontSize: 12.5, color: C.w34, marginTop: 8, fontStyle: 'italic' },
 
+  brandBlock: { marginTop: 18, marginBottom: 4 },
   brandRow: { flexDirection: 'row', alignItems: 'flex-end', marginBottom: 5 },
-  brandKarins: { fontFamily: FontFamily.logo, fontSize: 31, color: C.white, letterSpacing: -0.3, lineHeight: 32 },
-  brandFleet: { fontSize: 17, fontWeight: '600', color: C.white, marginLeft: 10, marginBottom: 2 },
+  brandKarins: {
+    fontFamily: FontFamily.logo,
+    fontSize: 31,
+    color: C.white,
+    letterSpacing: -0.3,
+    lineHeight: 32,
+  },
+  brandFleet: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: C.white,
+    marginLeft: 10,
+    marginBottom: 2,
+  },
   brandTag: { fontSize: 9.5, color: C.white, letterSpacing: 1.2 },
 
-  bottomHintWrap: { position: 'absolute', left: 0, right: 0, bottom: 24, alignItems: 'center', zIndex: 2 },
+  bottomHintWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 24,
+    alignItems: 'center',
+    zIndex: 2,
+  },
   bottomHint: { fontSize: 10, color: C.w24, letterSpacing: 0.6, fontFamily: MONO },
 });
 

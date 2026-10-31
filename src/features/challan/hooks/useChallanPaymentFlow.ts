@@ -1,5 +1,6 @@
 /**
- * Shared e-Challan checkout session — mirrors web EchallanContainer pay/cancel/timeout flow.
+ * Shared e-Challan checkout session — Finii paymentLink opens in-app WebView;
+ * on returnUrl we poll /echallan/payment-status (web EchallanContainer parity).
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -29,6 +30,28 @@ interface PaymentSession {
 
 interface UseChallanPaymentFlowOptions {
   onRefresh?: () => void;
+}
+
+/** Same labels as web EchallanContainer paymentStatus column. */
+function getPaymentStatusLabel(
+  transactionStatus?: string | null,
+  ioStatus?: string | null,
+): string {
+  const normalizedTxn = transactionStatus?.toLowerCase();
+  const normalizedIo = ioStatus?.toLowerCase();
+
+  if (normalizedTxn === 'initiated') return 'In Progress';
+  if (normalizedTxn === 'cancelled') return 'Cancelled';
+  if (normalizedTxn === 'failed') return 'Failed';
+  if (normalizedTxn === 'captured') {
+    if (normalizedIo === 'done') return 'Success';
+    if (normalizedIo === 'pending') return 'Payment Success–Processing';
+    if (normalizedIo === 'refund') return 'Refund';
+    if (normalizedIo === 'hold') return 'Hold';
+    if (normalizedIo === 'other') return 'Other';
+    return 'Payment Success–Processing';
+  }
+  return 'Pending';
 }
 
 export function useChallanPaymentFlow({ onRefresh }: UseChallanPaymentFlowOptions = {}) {
@@ -67,6 +90,49 @@ export function useChallanPaymentFlow({ onRefresh }: UseChallanPaymentFlowOption
     }
   }, []);
 
+  /**
+   * After Finii redirects back into the WebView, wait briefly for the webhook
+   * then read session status — never treat the return URL alone as success.
+   */
+  const fetchAndNotifyPaymentStatus = useCallback(async (session: PaymentSession) => {
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
+      const { data } = await challanApi.getPaymentStatus({
+        requestId: session.requestId,
+        challanNumber: session.challanNumber,
+      });
+
+      const paymentResult = String(data?.paymentResult ?? '').toLowerCase();
+      const statusLabel = getPaymentStatusLabel(
+        data?.transactionStatus,
+        data?.ioStatus,
+      );
+
+      if (paymentResult === 'success') {
+        Alert.alert('Payment Status', `Status: ${statusLabel}`);
+      } else if (paymentResult === 'failed') {
+        Alert.alert('Payment Status', `Status: ${statusLabel}`);
+      } else if (paymentResult === 'cancelled') {
+        Alert.alert('Payment Status', `Status: ${statusLabel}`);
+      } else {
+        // initiated / pending — webhook may still be in flight
+        Alert.alert('Payment Status', `Status: ${statusLabel}`);
+      }
+
+      scheduleRefresh();
+    } catch (err: unknown) {
+      Alert.alert(
+        'Status Unavailable',
+        getApiErrorMessage(
+          err,
+          'Could not fetch payment status. Please refresh the list shortly.',
+        ),
+      );
+      scheduleRefresh();
+    }
+  }, [scheduleRefresh]);
+
   const startPayment = useCallback(async (challanNo: string, vehicleNo: string) => {
     const normalizedChallanNo = normalizeChallanNo(challanNo);
     const normalizedVehicleNo = normalizeChallanVehicleNo(vehicleNo);
@@ -80,24 +146,25 @@ export function useChallanPaymentFlow({ onRefresh }: UseChallanPaymentFlowOption
 
       const { paymentUrl, requestId, initialChallanStatus } = parsePayNowResponse(data);
 
-      // Web opens checkout whenever paymentUrl is returned. amountDetail.status can
-      // read "paid" while our list still shows Pending — only block when no URL.
+      // Block only when gateway sent no page and already marks the challan paid.
       if (shouldBlockPayNowCheckout(paymentUrl, initialChallanStatus)) {
         Alert.alert('Info', 'Challan is already paid. Cannot proceed with payment.');
         return;
       }
 
-      if (!paymentUrl) {
-        Alert.alert('Payment Error', 'No payment page returned. Please try again.');
+      // Finii requires both paymentLink and requestId (web parity).
+      if (!paymentUrl || !requestId) {
+        Alert.alert('Payment Error', 'Payment link not received. Please try again.');
         return;
       }
 
       const session = {
-        requestId: requestId || `mobile-${Date.now()}`,
+        requestId,
         challanNumber: normalizedChallanNo,
       };
       paymentSessionRef.current = session;
 
+      // uri mode for Finii https link; html mode only for legacy Razorpay markup
       const checkoutSource = resolveChallanCheckoutSource(paymentUrl);
       setCheckout(checkoutSource);
 
@@ -124,6 +191,28 @@ export function useChallanPaymentFlow({ onRefresh }: UseChallanPaymentFlowOption
   ) => {
     const session = paymentSessionRef.current;
     clearPaymentTimeout();
+
+    // Finii return — close modal first, then resolve webhook status (do not cancel).
+    if (type === 'PAYMENT_GATEWAY_RETURN') {
+      const returnSession: PaymentSession = {
+        requestId: meta?.requestId || session?.requestId || '',
+        challanNumber: meta?.challanNumber || session?.challanNumber || '',
+      };
+      closePaymentModal();
+
+      if (!returnSession.requestId || !returnSession.challanNumber) {
+        Alert.alert(
+          'Status Unavailable',
+          'Payment finished but session details were missing. Please refresh the list.',
+        );
+        scheduleRefresh();
+        return;
+      }
+
+      await fetchAndNotifyPaymentStatus(returnSession);
+      return;
+    }
+
     closePaymentModal();
 
     if (type === 'PAYMENT_SUCCESS') {
@@ -147,7 +236,13 @@ export function useChallanPaymentFlow({ onRefresh }: UseChallanPaymentFlowOption
       Alert.alert('Payment Cancelled', 'You can retry the payment anytime');
       scheduleRefresh();
     }
-  }, [cancelPaymentSession, clearPaymentTimeout, closePaymentModal, scheduleRefresh]);
+  }, [
+    cancelPaymentSession,
+    clearPaymentTimeout,
+    closePaymentModal,
+    fetchAndNotifyPaymentStatus,
+    scheduleRefresh,
+  ]);
 
   const handleClosePayment = useCallback(async () => {
     const session = paymentSessionRef.current;

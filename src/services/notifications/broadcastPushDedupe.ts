@@ -65,3 +65,26 @@ export function markBroadcastPushShown(notificationId: string): void {
     markBroadcastPushSeeded();
   }
 }
+
+export interface BroadcastPushDedupeSnapshot {
+  ids: string[];
+  seeded: boolean;
+}
+
+/** Snapshot before Cache.clearAll — cron polls must not re-buzz after re-login. */
+export function snapshotBroadcastPushDedupe(): BroadcastPushDedupeSnapshot {
+  return {
+    ids: [...loadBroadcastPushedIds()],
+    seeded: isBroadcastPushSeeded(),
+  };
+}
+
+export function restoreBroadcastPushDedupe(snapshot: BroadcastPushDedupeSnapshot): void {
+  if (!snapshot) return;
+  if (snapshot.ids?.length) {
+    saveBroadcastPushedIds(new Set(snapshot.ids));
+  }
+  if (snapshot.seeded) {
+    markBroadcastPushSeeded();
+  }
+}

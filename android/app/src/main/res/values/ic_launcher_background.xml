@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Matches the Karins fleet icon gradient top so adaptive masks don't flash white -->
+    <color name="ic_launcher_background">#013789</color>
+</resources>

@@ -1,6 +1,7 @@
 import {
   isAllowedChallanPopupUrl,
   parseChallanPaymentNavigation,
+  parseFiniiPaymentReturn,
 } from '../parseChallanPaymentNavigation';
 
 describe('parseChallanPaymentNavigation', () => {
@@ -36,6 +37,46 @@ describe('parseChallanPaymentNavigation', () => {
     expect(
       parseChallanPaymentNavigation('https://fleet.karins.in/callback?paymentStatus=cancelled'),
     ).toBe('PAYMENT_CANCEL');
+  });
+
+  it('detects Finii returnUrl on trusted Karins e-Challan list', () => {
+    expect(
+      parseChallanPaymentNavigation(
+        'https://fleet.karins.in/echallan/list?requestId=req-1&challanNumber=CH123',
+      ),
+    ).toBe('PAYMENT_GATEWAY_RETURN');
+  });
+
+  it('does not treat requestId on untrusted host as Finii return', () => {
+    expect(
+      parseChallanPaymentNavigation(
+        'https://evil.tld/echallan/list?requestId=req-1&challanNumber=CH123',
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('parseFiniiPaymentReturn', () => {
+  it('extracts requestId and challanNumber from Finii returnUrl', () => {
+    expect(
+      parseFiniiPaymentReturn(
+        'https://testfleet.karins.in/echallan/list?requestId=abc&challanNumber=MH12AB1234',
+      ),
+    ).toEqual({ requestId: 'abc', challanNumber: 'MH12AB1234' });
+  });
+
+  it('rejects Finii-looking params outside /echallan/list', () => {
+    expect(
+      parseFiniiPaymentReturn(
+        'https://fleet.karins.in/other?requestId=abc&challanNumber=CH1',
+      ),
+    ).toBeNull();
+  });
+
+  it('rejects missing session keys', () => {
+    expect(
+      parseFiniiPaymentReturn('https://fleet.karins.in/echallan/list?requestId=abc'),
+    ).toBeNull();
   });
 });
 

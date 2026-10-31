@@ -7,10 +7,15 @@ import type { ClaimFilter } from '../claimStatus';
 import type { ClaimFilters } from '../constants/claimFilters';
 import { resolveClaimDateRange } from './claimDateRange';
 
-/** Quick status chips map to the same API codes as the web status dropdown. */
+/**
+ * Maps chips that the ledger can filter by claimStatus.
+ * PENDING is a UI group only — no single API code — so it returns undefined
+ * and ClaimsScreen filters rows by statusGroup after fetch.
+ */
 export function claimStatusFromChip(chip: ClaimFilter): string | undefined {
   switch (chip) {
     case 'ALL': return undefined;
+    case 'PENDING': return undefined;
     case 'WAITING_FOR_DOC': return 'WAITING_FOR_DOC';
     case 'APPROVED': return 'CLAIM_RECEIVED';
     case 'REJECTED': return 'CLAIM_REJECTED';

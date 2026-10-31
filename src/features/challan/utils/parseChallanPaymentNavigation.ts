@@ -4,14 +4,33 @@
  *
  * Status is read from named query params or trusted-origin pathnames only — never
  * a substring of the full URL (MASVS-CODE-4 / NPCI integrity).
+ *
+ * Finii does not put success/fail in the return URL — it redirects to the Karins
+ * e-Challan list with requestId + challanNumber; callers then hit /payment-status.
  */
 
-export type ChallanPaymentEventType = 'PAYMENT_SUCCESS' | 'PAYMENT_FAILED' | 'PAYMENT_CANCEL';
+export type ChallanPaymentEventType =
+  | 'PAYMENT_SUCCESS'
+  | 'PAYMENT_FAILED'
+  | 'PAYMENT_CANCEL'
+  /** Finii returnUrl landed — resolve real outcome via /echallan/payment-status. */
+  | 'PAYMENT_GATEWAY_RETURN';
 
-/** Razorpay + Karins — pathname hints are allowed only on these origins. */
+export interface FiniiPaymentReturn {
+  requestId: string;
+  challanNumber: string;
+}
+
+/** Razorpay + Karins — pathname / Finii-return hints are allowed only on these origins. */
 const TRUSTED_PAYMENT_ORIGINS = new Set([
   'https://checkout.razorpay.com',
   'https://api.razorpay.com',
+  'https://fleet.karins.in',
+  'https://testfleet.karins.in',
+]);
+
+/** Origins where Finii may redirect after checkout (web list returnUrl). */
+const TRUSTED_FINII_RETURN_ORIGINS = new Set([
   'https://fleet.karins.in',
   'https://testfleet.karins.in',
 ]);
@@ -106,6 +125,45 @@ function readStatusFromPathname(pathname: string): ChallanPaymentEventType | nul
   return null;
 }
 
+/**
+ * Finii returnUrl (web parity): lands on Karins /echallan/list with
+ * requestId + challanNumber — outcome is NOT in the URL; callers must poll
+ * /echallan/payment-status. Restricted to trusted Karins origins only.
+ */
+export function parseFiniiPaymentReturn(url: string): FiniiPaymentReturn | null {
+  if (!url?.trim()) return null;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+
+  if (parsed.protocol !== 'https:') return null;
+  if (!TRUSTED_FINII_RETURN_ORIGINS.has(parsed.origin)) return null;
+
+  // Accept /echallan/list and trailing-slash variants Finii may append.
+  const path = parsed.pathname.toLowerCase().replace(/\/+$/, '') || '/';
+  if (path !== '/echallan/list') return null;
+
+  const requestId = (
+    parsed.searchParams.get('requestId')
+    ?? parsed.searchParams.get('request_id')
+    ?? ''
+  ).trim();
+  const challanNumber = (
+    parsed.searchParams.get('challanNumber')
+    ?? parsed.searchParams.get('challan_number')
+    ?? parsed.searchParams.get('challanNo')
+    ?? ''
+  ).trim();
+
+  if (!requestId || !challanNumber) return null;
+
+  return { requestId, challanNumber };
+}
+
 export function parseChallanPaymentNavigation(
   url: string,
 ): ChallanPaymentEventType | null {
@@ -113,9 +171,9 @@ export function parseChallanPaymentNavigation(
 
   let parsed: URL;
 
-  try {                                                  
+  try {
     parsed = new URL(url);
-  } catch {                                                                                       
+  } catch {
     return null;
   }
 
@@ -136,6 +194,11 @@ export function parseChallanPaymentNavigation(
 
   if (fromQuery) {
     return fromQuery;
+  }
+
+  // Finii has no status query — only session keys on the Karins list returnUrl.
+  if (parseFiniiPaymentReturn(url)) {
+    return 'PAYMENT_GATEWAY_RETURN';
   }
 
   // Pathname hints use a looser regex/suffix match, so they stay restricted to
